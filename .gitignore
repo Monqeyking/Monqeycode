@@ -1,0 +1,32 @@
+# Local DSH runtime state and credentials
+.credentials.yaml
+.anonymous-user-id
+settings.yaml
+electron-data/
+local-appdata/
+npm-cache/
+.pnpm-store/
+sessions/
+storages/
+electron-builder-cache/
+*.log
+
+# Installed dependencies and generated build output
+**/node_modules/
+profiles/node_modules.pre-update-*/
+desktop-wrapper/node_modules/
+desktop-wrapper/dist/
+desktop-wrapper/.webpack/
+desktop-wrapper/assets/*preview.png
+
+# Local model and installer artifacts
+*.exe
+*.msi
+*.dmg
+*.AppImage
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

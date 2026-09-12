@@ -1,0 +1,7 @@
+# Replace the official occupants with the local Monqey Code identity.
+- id: ui-brand-official
+  disabled: true
+
+- insert:
+    - id: ui-brand-monqey
+      name: monqey-code-brand

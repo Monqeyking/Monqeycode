@@ -1,0 +1,21 @@
+# Copy this file to settings.yaml for a local Qwen/MROC setup.
+# Keep settings.yaml local; it may contain machine-specific routes or credentials.
+ui-theme:
+  preference: dark
+
+llm-pi-ai:
+  providers:
+    openai-codex: {}
+    mroc-llama:
+      displayName: mroc-llama
+      api: openai-completions
+      baseURL: http://127.0.0.1:8080/v1
+      models:
+        - id: Qwen 3.6 35b a3b
+          name: Qwen 3.6 35B A3B (Local)
+          contextWindow: 131072
+          maxTokens: 8192
+
+agent-default-model:
+  provider: mroc-llama
+  model: Qwen 3.6 35b a3b

@@ -1,0 +1,19 @@
+{
+  "name": "dsh-profile-web",
+  "private": true,
+  "dependencies": {
+    "dsh-native-codex-oauth": "github:kfc966/dsh-native-codex-oauth",
+    "monqey-code-brand": "link:../../packages/monqey-code-brand"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dsh-native-codex-oauth",
+        "monqey-code-brand"
+      ],
+      "patchReload": "live"
+    }
+  }
+}

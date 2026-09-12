@@ -1,0 +1,30 @@
+{
+  "name": "monqey-code-desktop",
+  "version": "0.0.5",
+  "private": true,
+  "description": "Minimal Electron wrapper for the existing DSH web profile",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "latest",
+    "electron-builder": "latest"
+  },
+  "build": {
+    "appId": "com.monqey.code",
+    "productName": "Monqey Code",
+    "asar": true,
+    "icon": "assets/monqey.ico",
+    "files": [
+      "main.js",
+      "package.json",
+      "assets/monqey.ico"
+    ],
+    "win": {
+      "signExecutable": false,
+      "target": "portable"
+    }
+  }
+}

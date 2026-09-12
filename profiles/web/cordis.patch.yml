@@ -1,0 +1,25 @@
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+# Enable long-session context management for Monqey Code's Web profile.
+# The upstream Web bundle disables these rows; this profile layer re-enables
+# the backend, the manual /compact command, and oversized tool-result pruning.
+- id: compaction-basic
+  name: '@deepseek-ai/dsh-compaction-basic'
+  config:
+    auto: true
+    thresholdRatio: 0.75
+    retainRatio: 0.16
+    maxTokens: 8192
+    compactionRetries: 1
+    maxOverflowRetries: 1
+
+- id: command-compact
+  name: '@deepseek-ai/dsh-command-compact'
+
+- id: tool-result-pruner
+  name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+  config:
+    thresholdChars: 8192
+    headChars: 4096
+    tailChars: 1024
