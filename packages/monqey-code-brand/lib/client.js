@@ -49,8 +49,8 @@ window.__ModuleLoader__.load({
         href: "https://chatgpt.com/codex/settings/usage",
         target: "_blank",
         rel: "noreferrer",
-        title: "Open je resterend Codex-gebruik",
-        "aria-label": "Open je resterend Codex-gebruik",
+        title: "Open remaining Codex usage",
+        "aria-label": "Open remaining Codex usage",
         style: {
           display: "inline-flex",
           alignItems: "center",
@@ -70,10 +70,20 @@ window.__ModuleLoader__.load({
       });
     }
 
-    const inject = ["slots", "modelDirectories"];
+    const inject = ["slots", "remote", "remote.session", "modelDirectories"];
 
     function apply(ctx) {
-      if (typeof document !== "undefined") document.title = "Monqey Code";
+      if (typeof document !== "undefined") {
+        const setTitle = () => {
+          if (document.title !== "Monqey Code") document.title = "Monqey Code";
+        };
+        ctx.effect(() => {
+          setTitle();
+          const observer = new MutationObserver(setTitle);
+          observer.observe(document.head, { childList: true, characterData: true, subtree: true });
+          return () => observer.disconnect();
+        }, "monqey-code-brand: document title");
+      }
       ctx.slots.inject("sidebar.brand.mark", () =>
         ctx.slots.inject("sidebar.brand.name", () =>
           ctx.slots.inject("conversation.hero.brand.mark", function* () {
@@ -83,10 +93,14 @@ window.__ModuleLoader__.load({
           })
         )
       );
-      ctx.slots.inject("conversation.input.right", () => ctx.slots.register({
-        name: "conversation.input.right",
-        inject: (sessionId) => ({ directory: ctx.modelDirectories.directoryFor(sessionId).store })
-      }, CodexUsageLink));
+      ctx.inject(["slots", "modelDirectories"], (scope) => {
+        const models = scope.modelDirectories;
+        scope.slots.inject("conversation.input.right", () => scope.slots.register({
+          name: "conversation.input.right",
+          id: "monqey-code-codex-usage",
+          inject: (sessionId) => ({ directory: models.directoryFor(sessionId).store })
+        }, CodexUsageLink));
+      });
     }
 
     exports.apply = apply;
