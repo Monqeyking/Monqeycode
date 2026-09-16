@@ -3,7 +3,12 @@
   "private": true,
   "dependencies": {
     "dsh-native-codex-oauth": "github:kfc966/dsh-native-codex-oauth",
-    "monqey-code-brand": "link:../../packages/monqey-code-brand"
+    "monqey-code-brand": "link:../../packages/monqey-code-brand",
+    "@deepseek-ai/dsh-llm": "link:../../packages/monqey-code-llm",
+    "@deepseek-ai/dsh-llm-pi-ai": "link:../../packages/monqey-code-llm-pi-ai",
+    "@deepseek-ai/dsh-client-ui-settings-models": "link:../../packages/monqey-code-ui-settings-models",
+    "monqey-code-mcp": "link:../../packages/monqey-code-mcp",
+    "monqey-code-notifications": "link:../../packages/monqey-code-notifications"
   },
   "dsh": {
     "profile": {
@@ -11,7 +16,9 @@
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-web-app",
         "dsh-native-codex-oauth",
-        "monqey-code-brand"
+        "monqey-code-brand",
+        "monqey-code-mcp",
+        "monqey-code-notifications"
       ],
       "patchReload": "live"
     }

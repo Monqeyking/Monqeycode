@@ -8,12 +8,27 @@ importers:
 
   .:
     dependencies:
+      '@deepseek-ai/dsh-client-ui-settings-models':
+        specifier: link:../../packages/monqey-code-ui-settings-models
+        version: link:../../packages/monqey-code-ui-settings-models
+      '@deepseek-ai/dsh-llm':
+        specifier: link:../../packages/monqey-code-llm
+        version: link:../../packages/monqey-code-llm
+      '@deepseek-ai/dsh-llm-pi-ai':
+        specifier: link:../../packages/monqey-code-llm-pi-ai
+        version: link:../../packages/monqey-code-llm-pi-ai
       dsh-native-codex-oauth:
         specifier: github:kfc966/dsh-native-codex-oauth
         version: https://codeload.github.com/kfc966/dsh-native-codex-oauth/tar.gz/28273cc4615f2e4cb5a11cf0c57968b68101f737
       monqey-code-brand:
         specifier: link:../../packages/monqey-code-brand
         version: link:../../packages/monqey-code-brand
+      monqey-code-mcp:
+        specifier: link:../../packages/monqey-code-mcp
+        version: link:../../packages/monqey-code-mcp
+      monqey-code-notifications:
+        specifier: link:../../packages/monqey-code-notifications
+        version: link:../../packages/monqey-code-notifications
 
 packages:
 

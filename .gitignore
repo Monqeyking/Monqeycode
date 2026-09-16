@@ -25,6 +25,12 @@ desktop-wrapper/assets/*preview.png
 *.dmg
 *.AppImage
 
+# Local runtime data and temporary source checkouts
+attachments/
+llm-deepseek/
+upstream-deepseek-harness/
+vendor/
+
 # OS/editor noise
 .DS_Store
 Thumbs.db

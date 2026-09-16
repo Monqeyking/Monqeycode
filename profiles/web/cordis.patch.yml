@@ -6,6 +6,7 @@
 # the backend, the manual /compact command, and oversized tool-result pruning.
 - id: compaction-basic
   name: '@deepseek-ai/dsh-compaction-basic'
+  disabled: false
   config:
     auto: true
     thresholdRatio: 0.75
@@ -16,9 +17,11 @@
 
 - id: command-compact
   name: '@deepseek-ai/dsh-command-compact'
+  disabled: false
 
 - id: tool-result-pruner
   name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+  disabled: false
   config:
     thresholdChars: 8192
     headChars: 4096
