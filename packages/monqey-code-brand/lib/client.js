@@ -42,31 +42,216 @@ window.__ModuleLoader__.load({
       });
     }
 
-    function CodexUsageLink({ directory }) {
+    function formatUsageReset(resetAt) {
+      if (!Number.isFinite(resetAt)) return null;
+      return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(resetAt * 1e3));
+    }
+
+    function UsageWindow({ label, value }) {
+      if (value === null) return null;
+      const used = Math.round(value.usedPercent);
+      const remaining = Math.round(value.remainingPercent);
+      const reset = formatUsageReset(value.resetAt);
+      return jsx("div", {
+        style: { marginTop: 16 },
+        children: [
+          jsx("div", {
+            style: { display: "flex", justifyContent: "space-between", gap: 12, fontSize: 13, lineHeight: "20px" },
+            children: [
+              jsx("strong", { children: label }),
+              jsx("span", { style: { color: "var(--dsw-alias-label-secondary)" }, children: `${used}% used` })
+            ]
+          }),
+          jsx("div", {
+            "aria-hidden": "true",
+            style: { height: 8, marginTop: 8, background: "rgb(255 255 255 / 10%)", borderRadius: 99, overflow: "hidden" },
+            children: jsx("div", { style: { width: `${used}%`, height: "100%", background: "#55ad6c", borderRadius: 99 } })
+          }),
+          jsx("div", {
+            style: { display: "flex", justifyContent: "space-between", gap: 12, marginTop: 6, color: "var(--dsw-alias-label-secondary)", fontSize: 12, lineHeight: "18px" },
+            children: [
+              jsx("span", { children: reset === null ? "" : `Resets ${reset}` }),
+              jsx("span", { children: `Remaining ${remaining}%` })
+            ]
+          })
+        ]
+      });
+    }
+
+    function CodexUsageLink({ directory, remote }) {
       const state = react.useSyncExternalStore((listener) => directory.subscribe(listener), () => directory.getSnapshot(), () => directory.getSnapshot());
+      const [open, setOpen] = react.useState(false);
+      const [usage, setUsage] = react.useState(null);
+      const [loading, setLoading] = react.useState(false);
+      const [error, setError] = react.useState(null);
+      const loadUsage = react.useCallback(async (signal) => {
+        setLoading(true);
+        setError(null);
+        try {
+          const result = await remote?.llm?.getCodexUsage(signal);
+          if (!result?.ok) throw new Error(result?.error?.message ?? "Usage is unavailable");
+          setUsage(result.value);
+        } catch (cause) {
+          if (cause?.name !== "AbortError") setError(cause?.message ?? "Usage is unavailable right now.");
+        } finally {
+          if (!signal.aborted) setLoading(false);
+        }
+      }, [remote]);
+      react.useEffect(() => {
+        if (!open) return;
+        const controller = new AbortController();
+        void loadUsage(controller.signal);
+        const closeOnEscape = (event) => {
+          if (event.key === "Escape") setOpen(false);
+        };
+        document.addEventListener("keydown", closeOnEscape);
+        return () => {
+          controller.abort();
+          document.removeEventListener("keydown", closeOnEscape);
+        };
+      }, [loadUsage, open]);
       if (state.current?.provider !== "openai-codex") return null;
-      return jsx("a", {
-        href: "https://chatgpt.com/codex/settings/usage",
-        target: "_blank",
-        rel: "noreferrer",
-        title: "Open remaining Codex usage",
-        "aria-label": "Open remaining Codex usage",
-        style: {
-          display: "inline-flex",
-          alignItems: "center",
-          height: 28,
-          maxWidth: 150,
-          color: "var(--dsw-alias-label-secondary)",
-          textDecoration: "none",
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          borderRadius: 8,
-          padding: "0 8px",
-          fontSize: 13,
-          lineHeight: "20px"
-        },
-        children: "Resterend gebruik"
+      const primaryLabel = usage?.primary?.windowDurationSeconds >= 172800 ? "Weekly limit" : usage?.primary?.windowDurationSeconds <= 21600 ? "5-hour limit" : "Usage limit";
+      const secondaryLabel = usage?.secondary?.windowDurationSeconds >= 172800 ? "Weekly limit" : "Usage limit";
+      return jsx("div", {
+        style: { position: "relative" },
+        children: [
+          jsx("button", {
+            type: "button",
+            onClick: () => setOpen((value) => !value),
+            title: "Open remaining Codex usage",
+            "aria-label": "Open remaining Codex usage",
+            "aria-haspopup": "dialog",
+            "aria-expanded": open,
+            style: {
+              display: "inline-flex",
+              alignItems: "center",
+              height: 28,
+              maxWidth: 150,
+              color: "var(--dsw-alias-label-secondary)",
+              background: "transparent",
+              border: 0,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              borderRadius: 8,
+              padding: "0 8px",
+              font: "inherit",
+              fontSize: 13,
+              lineHeight: "20px"
+            },
+            children: "Resterend gebruik"
+          }),
+          open && jsx("div", {
+            role: "dialog",
+            "aria-label": "My usage",
+            style: {
+              position: "absolute",
+              right: 0,
+              bottom: "calc(100% + 10px)",
+              zIndex: 1000,
+              boxSizing: "border-box",
+              width: 400,
+              maxWidth: "calc(100vw - 24px)",
+              color: "var(--dsw-alias-label-primary)",
+              background: "var(--dsw-alias-bg-layer-1)",
+              border: "1px solid var(--dsw-alias-border-l3)",
+              borderRadius: 16,
+              boxShadow: "0 16px 40px rgb(0 0 0 / 28%)",
+              overflow: "hidden"
+            },
+            children: [
+              jsx("div", {
+                style: {
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "16px 20px 12px"
+                },
+                children: [
+                  jsx("strong", { style: { fontSize: 16, lineHeight: "24px" }, children: "My usage" }),
+                  jsx("button", {
+                    type: "button",
+                    onClick: () => setOpen(false),
+                    "aria-label": "Close usage",
+                    style: {
+                      width: 28,
+                      height: 28,
+                      color: "var(--dsw-alias-label-secondary)",
+                      background: "transparent",
+                      border: 0,
+                      borderRadius: 8,
+                      cursor: "pointer",
+                      fontSize: 22,
+                      lineHeight: "24px"
+                    },
+                    children: "×"
+                  })
+                ]
+              }),
+              jsx("div", {
+                style: { padding: "4px 20px 18px" },
+                children: [
+                  jsx("div", {
+                    style: { display: "flex", justifyContent: "space-between", gap: 12, fontSize: 14, fontWeight: 600, lineHeight: "22px" },
+                    children: [
+                      jsx("span", { children: "Codex usage" }),
+                      usage?.planType && jsx("span", { style: { color: "var(--dsw-alias-label-secondary)", fontSize: 12, fontWeight: 400 }, children: usage.planType })
+                    ]
+                  }),
+                  loading && jsx("p", { style: { color: "var(--dsw-alias-label-secondary)", margin: "12px 0 0", fontSize: 13, lineHeight: "20px" }, children: "Loading current limits…" }),
+                  !loading && error && jsx("p", { style: { color: "var(--dsw-alias-label-secondary)", margin: "12px 0 0", fontSize: 13, lineHeight: "20px" }, children: error }),
+                  !loading && !error && usage && [
+                    jsx(UsageWindow, { key: "primary", label: primaryLabel, value: usage.primary }),
+                    jsx(UsageWindow, { key: "secondary", label: secondaryLabel, value: usage.secondary }),
+                    usage.credits && jsx("div", {
+                      key: "credits",
+                      style: { display: "flex", justifyContent: "space-between", marginTop: 16, paddingTop: 12, borderTop: "1px solid var(--dsw-alias-border-l3)", fontSize: 13, lineHeight: "20px" },
+                      children: [
+                        jsx("span", { children: "Credits" }),
+                        jsx("strong", { children: usage.credits.balance ?? (usage.credits.hasCredits ? "Available" : "None") })
+                      ]
+                    })
+                  ],
+                  !loading && !error && !usage && jsx("p", { style: { color: "var(--dsw-alias-label-secondary)", margin: "12px 0 0", fontSize: 13, lineHeight: "20px" }, children: "No usage data returned." })
+                ]
+              }),
+              jsx("div", {
+                style: { display: "flex", gap: 8, padding: "14px 20px 16px", borderTop: "1px solid var(--dsw-alias-border-l3)" },
+                children: [
+                  jsx("button", {
+                    type: "button",
+                    onClick: () => void loadUsage(new AbortController().signal),
+                    title: "Refresh usage",
+                    "aria-label": "Refresh usage",
+                    style: { width: 36, height: 36, color: "var(--dsw-alias-label-secondary)", background: "transparent", border: "1px solid var(--dsw-alias-border-l3)", borderRadius: 10, cursor: "pointer", fontSize: 18 },
+                    children: "↻"
+                  }),
+                  jsx("a", {
+                    href: "https://chatgpt.com/codex/settings/usage",
+                    target: "_blank",
+                    rel: "noreferrer",
+                    style: {
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flex: 1,
+                      height: 36,
+                      color: "var(--dsw-alias-label-primary-foreground)",
+                      background: "var(--dsw-alias-button-primary-fill)",
+                      borderRadius: 10,
+                      textDecoration: "none",
+                      fontSize: 14,
+                      lineHeight: "22px"
+                    },
+                    children: "View details ↗"
+                  })
+                ]
+              })
+            ]
+          })
+        ]
       });
     }
 
@@ -93,12 +278,12 @@ window.__ModuleLoader__.load({
           })
         )
       );
-      ctx.inject(["slots", "modelDirectories"], (scope) => {
+      ctx.inject(["slots", "remote", "remote.llm", "modelDirectories"], (scope) => {
         const models = scope.modelDirectories;
         scope.slots.inject("conversation.input.right", () => scope.slots.register({
           name: "conversation.input.right",
           id: "monqey-code-codex-usage",
-          inject: (sessionId) => ({ directory: models.directoryFor(sessionId).store })
+          inject: (sessionId) => ({ directory: models.directoryFor(sessionId).store, remote: scope.remote })
         }, CodexUsageLink));
       });
     }

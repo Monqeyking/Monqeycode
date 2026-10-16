@@ -31,10 +31,45 @@ const _deepseek_ai_dsh_llm_llm_listProviders_result$schema = z.array(z.object({
   'id': z.string(),
   'name': z.string(),
 }))
+const _deepseek_ai_dsh_llm_llm_getCodexUsage_result$schema = z.object({
+  'planType': z.union([z.string(), z.null()]),
+  'primary': z.union([z.null(), z.object({
+    'usedPercent': z.number(),
+    'remainingPercent': z.number(),
+    'windowDurationSeconds': z.union([z.number(), z.null()]),
+    'resetAt': z.union([z.number(), z.null()]),
+  })]),
+  'secondary': z.union([z.null(), z.object({
+    'usedPercent': z.number(),
+    'remainingPercent': z.number(),
+    'windowDurationSeconds': z.union([z.number(), z.null()]),
+    'resetAt': z.union([z.number(), z.null()]),
+  })]),
+  'credits': z.union([z.null(), z.object({
+    'hasCredits': z.boolean(),
+    'balance': z.union([z.string(), z.number(), z.null()]),
+  })]),
+})
 
 export const TYPERT_REMOTE = {
   package: '@deepseek-ai/dsh-llm',
   descriptors: [
+    {
+      id: '@deepseek-ai/dsh-llm#llm/getCodexUsage',
+      service: 'llm',
+      namespace: 'llm',
+      method: 'getCodexUsage',
+      invocation: { kind: 'direct' },
+      parameters: [
+      ],
+      cancellation: { parameter: 'signal' },
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-llm#llm/getCodexUsage:result',
+        schema: _deepseek_ai_dsh_llm_llm_getCodexUsage_result$schema,
+      },
+      sourceLocation: {"file":"packages/llm/llm/src/index.ts","line":650,"column":3},
+    },
     {
       id: '@deepseek-ai/dsh-llm#llm/discoverModels',
       service: 'llm',

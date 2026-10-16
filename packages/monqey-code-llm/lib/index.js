@@ -1685,6 +1685,37 @@ var LlmAdapter = class {
 		};
 	}
 };
+// shortcut: OpenAI's internal usage route is limited to these known paths; update this list when the provider changes it.
+const CODEX_USAGE_URLS = [
+	"https://chatgpt.com/backend-api/wham/usage"
+];
+const CODEX_USAGE_RESPONSE_LIMIT = 64 * 1024;
+function codexUsageWindow(value) {
+	if (value === null || typeof value !== "object") return null;
+	const usedPercent = Number(value.used_percent);
+	if (!Number.isFinite(usedPercent)) return null;
+	const windowDurationSeconds = Number(value.limit_window_seconds);
+	const resetAt = Number(value.reset_at);
+	return {
+		usedPercent: Math.max(0, Math.min(100, usedPercent)),
+		remainingPercent: Math.max(0, Math.min(100, 100 - usedPercent)),
+		windowDurationSeconds: Number.isSafeInteger(windowDurationSeconds) ? windowDurationSeconds : null,
+		resetAt: Number.isSafeInteger(resetAt) ? resetAt : null
+	};
+}
+function codexUsageView(body) {
+	if (body === null || typeof body !== "object") throw new Error("Codex usage returned an invalid response");
+	const credits = body.credits !== null && typeof body.credits === "object" ? {
+		hasCredits: body.credits.has_credits === true,
+		balance: typeof body.credits.balance === "string" || typeof body.credits.balance === "number" ? body.credits.balance : null
+	} : null;
+	return {
+		planType: typeof body.plan_type === "string" ? body.plan_type : null,
+		primary: codexUsageWindow(body.rate_limit?.primary_window),
+		secondary: codexUsageWindow(body.rate_limit?.secondary_window),
+		credits
+	};
+}
 /**
 * The abstract `llm` service: an adapter registry plus a streaming model-call
 * API, interceptable via the `llm/stream` waterfall.
@@ -1695,12 +1726,14 @@ let LlmRuntime = (() => {
 	let _listProviders_decorators;
 	let _listConfigurableProviders_decorators;
 	let _remoteDiscoverModels_decorators;
+	let _getCodexUsage_decorators;
 	return class LlmRuntime extends _classSuper {
 		static {
 			const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : void 0;
 			_listProviders_decorators = [Remote];
 			_listConfigurableProviders_decorators = [Remote];
 			_remoteDiscoverModels_decorators = [Remote("discoverModels")];
+			_getCodexUsage_decorators = [Remote];
 			__esDecorate(this, null, _listProviders_decorators, {
 				kind: "method",
 				name: "listProviders",
@@ -1734,6 +1767,17 @@ let LlmRuntime = (() => {
 				},
 				metadata: _metadata
 			}, null, _instanceExtraInitializers);
+			__esDecorate(this, null, _getCodexUsage_decorators, {
+				kind: "method",
+				name: "getCodexUsage",
+				static: false,
+				private: false,
+				access: {
+					has: (obj) => "getCodexUsage" in obj,
+					get: (obj) => obj.getCodexUsage
+				},
+				metadata: _metadata
+			}, null, _instanceExtraInitializers);
 			if (_metadata) Object.defineProperty(this, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
@@ -1746,6 +1790,39 @@ let LlmRuntime = (() => {
 		discoveries = /* @__PURE__ */ new Map();
 		constructor(ctx) {
 			super(ctx, "llm");
+		}
+		/** Read the current account limits without returning the stored OAuth grant. */
+		async getCodexUsage(signal) {
+			const record = await this.ctx.get("credentials")?.readRecord("llm-pi-ai/openai-codex");
+			const credential = record?.kind === "grant" ? record.payload : void 0;
+			if (credential?.type !== "oauth" || typeof credential.access !== "string" || typeof credential.accountId !== "string") throw new RemoteError("gateway/internal", "Codex account is not connected", {});
+			const requestSignal = signal === void 0 ? AbortSignal.timeout(5e3) : AbortSignal.any([signal, AbortSignal.timeout(5e3)]);
+			for (const endpoint of CODEX_USAGE_URLS) {
+				const response = await fetch(endpoint, {
+					headers: {
+						accept: "application/json",
+						authorization: `Bearer ${credential.access}`,
+						"ChatGPT-Account-ID": credential.accountId,
+						"user-agent": "codex-cli"
+					},
+					signal: requestSignal,
+					redirect: "error"
+				});
+				if (response.status === 404) {
+					await response.text();
+					continue;
+				}
+				if (!response.ok) throw new RemoteError("gateway/internal", `Codex usage returned HTTP ${response.status}`, { status: response.status });
+				const raw = await response.text();
+				if (raw.length > CODEX_USAGE_RESPONSE_LIMIT) throw new RemoteError("gateway/internal", "Codex usage response was too large", {});
+				try {
+					return codexUsageView(JSON.parse(raw));
+				} catch (error) {
+					if (error instanceof RemoteError) throw error;
+					throw new RemoteError("gateway/internal", "Codex usage returned invalid JSON", {}, { cause: error });
+				}
+			}
+			throw new RemoteError("gateway/internal", "Codex usage endpoint was not available", {});
 		}
 		/** Notify topology observers without letting one broken listener veto the commit. */
 		emitAdaptersUpdated() {
@@ -1953,7 +2030,12 @@ let LlmRuntime = (() => {
 					id: model.id,
 					...model.name === void 0 ? {} : { name: model.name },
 					...model.contextWindow === void 0 ? {} : { contextWindow: model.contextWindow },
-					...model.maxTokens === void 0 ? {} : { maxTokens: model.maxTokens }
+					...model.maxTokens === void 0 ? {} : { maxTokens: model.maxTokens },
+					...model.api === void 0 ? {} : { api: model.api },
+					...model.baseURL === void 0 ? {} : { baseURL: model.baseURL },
+					...model.reasoningEfforts === void 0 ? {} : { reasoningEfforts: model.reasoningEfforts },
+					...model.compat === void 0 ? {} : { compat: model.compat },
+					...model.input === void 0 ? {} : { input: model.input }
 				});
 			}
 			return models;
