@@ -452,10 +452,10 @@ window.__ModuleLoader__.load({
 		*
 		* The list is the profile's `models` array as the card holds it: an empty list
 		* means "serve this route's built-in catalog", and any entry replaces that
-		* catalog, so a row is only ever added deliberately. Fetching asks the endpoint
-		* **the form currently shows** — including a key typed but not yet saved — so
-		* adding a provider is one pass instead of save-then-return; the reply is
-		* candidates the user picks from, never configuration written behind them.
+		* catalog. Fetching asks the endpoint **the form currently shows** — including
+		* a key typed but not yet saved. OpenCode Go adds newly advertised ids to the
+		* draft, and fills only missing metadata on known rows; other providers keep
+		* their candidate picker. Existing user values always win.
 		*
 		* A provider that cannot be interrogated (an unreachable endpoint, a protocol
 		* with no readable listing) is not a dead end: the failure is shown next to the
@@ -557,6 +557,7 @@ window.__ModuleLoader__.load({
 			const { models, onChange, probe, operations, t, disabled } = props;
 			const [busy, setBusy] = (0, react.useState)(false);
 			const [failure, setFailure] = (0, react.useState)(void 0);
+			const [syncNotice, setSyncNotice] = (0, react.useState)(void 0);
 			const [candidates, setCandidates] = (0, react.useState)(void 0);
 			const [picked, setPicked] = (0, react.useState)(/* @__PURE__ */ new Set());
 			const [candidateQuery, setCandidateQuery] = (0, react.useState)("");
@@ -600,6 +601,7 @@ window.__ModuleLoader__.load({
 			const fetchModels = async () => {
 				setBusy(true);
 				setFailure(void 0);
+				setSyncNotice(void 0);
 				try {
 					const answer = await operations.discoverModels(probe.settingsNs, {
 						...probe.provider === void 0 ? {} : { provider: probe.provider },
@@ -614,6 +616,30 @@ window.__ModuleLoader__.load({
 					const found = answer.models;
 					if (found.length === 0) {
 						setFailure(t("fetchEmpty"));
+						return;
+					}
+					if (probe.provider === "opencode-go") {
+						const indexes = new Map(models.map((model, index) => [textOf(model, "id"), index]));
+						const next = [...models];
+						let additions = 0;
+						let refreshed = 0;
+						for (const candidate of found) {
+							const index = indexes.get(candidate.id);
+							const discovered = adopt(candidate);
+							if (index === void 0) {
+								indexes.set(candidate.id, next.length);
+								next.push(discovered);
+								additions++;
+								continue;
+							}
+							const current = next[index];
+							const missing = Object.fromEntries(Object.entries(discovered).filter(([key, value]) => key !== "id" && value !== void 0 && (current[key] === void 0 || current[key] === "")));
+							if (Object.keys(missing).length === 0) continue;
+							next[index] = { ...current, ...missing };
+							refreshed++;
+						}
+						if (additions > 0 || refreshed > 0) onChange(next);
+						setSyncNotice(additions === 0 && refreshed === 0 ? t("fetchCurrent") : t("fetchSynced").replace("{added}", String(additions)).replace("{refreshed}", String(refreshed)));
 						return;
 					}
 					setCandidateQuery("");
@@ -813,6 +839,11 @@ window.__ModuleLoader__.load({
 					failure !== void 0 ? (0, react_jsx_runtime.jsx)("p", {
 						className: ModelsSection_module_css_default["error"],
 						children: failure
+					}) : null,
+					syncNotice !== void 0 ? (0, react_jsx_runtime.jsx)("p", {
+						className: ModelsSection_module_css_default["savedNotice"],
+						role: "status",
+						children: syncNotice
 					}) : null,
 					(0, react_jsx_runtime.jsxs)(_deepseek_ai_dsh_client_ui_primitives.Modal, {
 						open: candidates !== void 0,
@@ -2735,6 +2766,9 @@ window.__ModuleLoader__.load({
 			fetching: "Asking the provider…",
 			fetchNeedsBaseUrl: "Enter the base URL first, then fetch.",
 			fetchEmpty: "The provider listed no models. Add them by hand.",
+			fetchAdded: "Added {count} new models. Apply to save the refreshed list.",
+			fetchSynced: "Found {added} new models and refreshed metadata for {refreshed} existing models. Apply to save.",
+			fetchCurrent: "The model list is already up to date.",
 			fetchTitle: "Synchronize models",
 			fetchDescription: "These are the models the provider currently advertises. Uncheck any you want to remove.",
 			fetchSearch: "Search models",
@@ -2838,6 +2872,9 @@ window.__ModuleLoader__.load({
 			fetching: "正在询问提供方…",
 			fetchNeedsBaseUrl: "请先填写 API 地址，再获取。",
 			fetchEmpty: "该提供方没有列出任何模型，请手动添加。",
+			fetchAdded: "已添加 {count} 个新模型。点击保存以应用更新后的列表。",
+			fetchSynced: "发现 {added} 个新模型，并更新了 {refreshed} 个现有模型的元数据。点击保存以应用。",
+			fetchCurrent: "模型列表已是最新。",
 			fetchTitle: "选择要添加的模型",
 			fetchDescription: "以下是模型提供方的可用模型，勾选要添加的模型。",
 			fetchSearch: "搜索模型",

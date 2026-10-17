@@ -8,6 +8,7 @@ import z from "@deepseek-ai/schemastery";
 import { credentialKey, credentialKeyId, credentialKeyScope, credentialRef, isCredentialKeySegment, isCredentialRefName } from "@deepseek-ai/dsh-credentials";
 import { builtinProviders, getBuiltinModels, getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
+import { googleGenerativeAIApi } from "@earendil-works/pi-ai/api/google-generative-ai.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { homedir } from "node:os";
@@ -754,6 +755,7 @@ function resolveRouteModels(request, validation = "strict") {
 const PROTOCOLS = {
 	"openai-completions": openAICompletionsApi,
 	"openai-responses": openAIResponsesApi,
+	"google-generative-ai": googleGenerativeAIApi,
 	"anthropic-messages": anthropicMessagesApi
 };
 /**
@@ -818,20 +820,276 @@ function routeAuth(spec, catalog) {
 		apiKey: harnessApiKeyAuth(spec.displayName)
 	};
 }
+const CODEX_MODEL_REFRESH_MS = 5 * 60 * 1e3;
+const CODEX_MODEL_RESPONSE_LIMIT = 1_048_576;
+const CODEX_MODEL_CLIENT_VERSION_FALLBACK = "0.159.0";
+const CODEX_RELEASES_URL = "https://api.github.com/repos/openai/codex/releases/latest";
+const CODEX_VERSION_CACHE_MS = 60 * 60 * 1e3;
+let codexModelClientVersion;
+let codexModelClientVersionAt = 0;
+const ANTHROPIC_MODEL_REFRESH_MS = 5 * 60 * 1e3;
+const ANTHROPIC_FALLBACK_MODEL_INFO = {
+	id: "claude-sonnet-5-5",
+	display_name: "Claude Sonnet 5.5 (latest)",
+	input: ["text", "image"],
+	cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+	reasoning: true,
+	thinkingLevelMap: { off: null },
+	max_input_tokens: 1_000_000,
+	max_tokens: 128_000
+};
+const CODEX_REASONING_LEVELS = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
+const CODEX_FALLBACK_MODEL_INFO = ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"].map((slug) => ({
+	slug,
+	display_name: slug === "gpt-6.1-sol" ? "GPT-6.1 Sol" : slug === "gpt-6-sol" ? "GPT-6 Sol" : "GPT-6 Luna",
+	visibility: "list",
+	supported_in_api: true,
+	input_modalities: ["text", "image"],
+	context_window: 272_000,
+	supported_reasoning_levels: ["low", "medium", "high", "xhigh", "max"].map((effort) => ({ effort }))
+}));
+/** Convert one visible Codex model into pi-ai metadata, keeping richer catalog facts when known. */
+function codexModelInfo(info, baseline, baseUrl) {
+	const id = typeof info.slug === "string" ? info.slug.trim() : "";
+	if (id.length === 0 || info.visibility !== "list" || info.supported_in_api !== true) return void 0;
+	const levels = Array.isArray(info.supported_reasoning_levels) ? [...new Set(info.supported_reasoning_levels.map((level) => level?.effort).filter((level) => CODEX_REASONING_LEVELS.has(level)))] : void 0;
+	const input = Array.isArray(info.input_modalities) ? [...new Set(info.input_modalities.filter((modality) => modality === "text" || modality === "image"))] : [];
+	const contextWindow = [info.context_window, info.max_context_window, baseline?.contextWindow, DEFAULT_CONTEXT_WINDOW].find((value) => Number.isSafeInteger(value) && value > 0);
+	const model = {
+		...baseline,
+		id,
+		name: typeof info.display_name === "string" && info.display_name.length > 0 ? info.display_name : baseline?.name ?? id,
+		api: "openai-codex-responses",
+		provider: "openai-codex",
+		baseUrl,
+		input: input.length > 0 ? input : baseline?.input ?? ["text"],
+		cost: baseline?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow,
+		maxTokens: baseline?.maxTokens ?? DEFAULT_MAX_TOKENS
+	};
+	if (levels !== void 0) {
+		model.reasoning = levels.length > 0;
+		if (levels.length > 0) model.thinkingLevelMap = { off: null, ...Object.fromEntries(levels.map((level) => [level, level])) };
+		else delete model.thinkingLevelMap;
+	}
+	else model.reasoning = baseline?.reasoning ?? false;
+	return model;
+}
+/** Use the latest stable Codex CLI version so new catalog entries are not hidden by a stale version pin. */
+async function currentCodexModelClientVersion(signal) {
+	if (codexModelClientVersion !== void 0 && Date.now() - codexModelClientVersionAt < CODEX_VERSION_CACHE_MS) return codexModelClientVersion;
+	try {
+		const response = await fetch(CODEX_RELEASES_URL, {
+			headers: { accept: "application/vnd.github+json", "user-agent": "Monqey-DSH" },
+			signal: AbortSignal.any([signal, AbortSignal.timeout(4e3)]),
+			redirect: "error"
+		});
+		if (!response.ok) throw new Error(`Codex release lookup returned HTTP ${response.status}`);
+		const release = JSON.parse(await readBounded(response, CODEX_RELEASES_URL, 64 * 1024));
+		const version = typeof release.tag_name === "string" ? release.tag_name.replace(/^rust-v/, "") : "";
+		if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error("Codex latest release did not contain a stable version tag");
+		codexModelClientVersion = version;
+	} catch (error) {
+		if (signal.aborted) throw error;
+		codexModelClientVersion ??= CODEX_MODEL_CLIENT_VERSION_FALLBACK;
+	}
+	codexModelClientVersionAt = Date.now();
+	return codexModelClientVersion;
+}
+/** Fetch the account-specific catalog from the Codex backend without exposing its OAuth grant. */
+async function fetchCodexModels(baseUrl, credential, signal, baselineModels, clientVersion) {
+	if (credential?.type !== "oauth" || typeof credential.access !== "string" || typeof credential.accountId !== "string") throw new Error("Codex model refresh requires an OAuth access token and account ID");
+	const url = new URL(`${baseUrl.replace(/\/+$/, "")}/codex/models`);
+	url.searchParams.set("client_version", clientVersion);
+	const response = await fetch(url, {
+		headers: {
+			accept: "application/json",
+			authorization: `Bearer ${credential.access}`,
+			"ChatGPT-Account-ID": credential.accountId,
+			originator: "pi"
+		},
+		signal: AbortSignal.any([signal, AbortSignal.timeout(5e3)]),
+		redirect: "error"
+	});
+	if (!response.ok) throw new Error(`Codex model catalog returned HTTP ${response.status}`);
+	const body = await readBounded(response, url.href, CODEX_MODEL_RESPONSE_LIMIT);
+	let catalog;
+	try {
+		catalog = JSON.parse(body);
+	} catch (error) {
+		throw new Error("Codex model catalog returned invalid JSON", { cause: error });
+	}
+	if (!Array.isArray(catalog?.models)) throw new Error("Codex model catalog did not contain a models list");
+	const baselineById = new Map(baselineModels.map((model) => [model.id, model]));
+	const models = new Map();
+	for (const info of catalog.models) {
+		if (info === null || typeof info !== "object") continue;
+		const model = codexModelInfo(info, baselineById.get(info.slug), baseUrl);
+		if (model !== void 0) models.set(model.id, model);
+	}
+	return [...models.values()];
+}
+/** Convert one Anthropic API catalog entry into pi-ai metadata. */
+function anthropicModelInfo(info, baseline, baseUrl) {
+	const id = typeof info.id === "string" ? info.id.trim() : "";
+	if (id.length === 0) return void 0;
+	const model = {
+		...baseline,
+		id,
+		name: typeof info.display_name === "string" && info.display_name.length > 0 ? info.display_name : baseline?.name ?? id,
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl,
+		input: Array.isArray(info.input) ? info.input : baseline?.input ?? ["text", "image"],
+		cost: info.cost ?? (id === ANTHROPIC_FALLBACK_MODEL_INFO.id ? ANTHROPIC_FALLBACK_MODEL_INFO.cost : baseline?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }),
+		contextWindow: Number.isSafeInteger(info.max_input_tokens) && info.max_input_tokens > 0 ? info.max_input_tokens : baseline?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+		maxTokens: Number.isSafeInteger(info.max_tokens) && info.max_tokens > 0 ? info.max_tokens : baseline?.maxTokens ?? DEFAULT_MAX_TOKENS
+	};
+	if (typeof info.reasoning === "boolean") model.reasoning = info.reasoning;
+	if (info.thinkingLevelMap !== null && typeof info.thinkingLevelMap === "object" && !Array.isArray(info.thinkingLevelMap)) model.thinkingLevelMap = info.thinkingLevelMap;
+	const capabilities = info.capabilities;
+	if (typeof capabilities?.thinking?.supported === "boolean") model.reasoning = capabilities.thinking.supported;
+	const efforts = ["low", "medium", "high", "xhigh", "max"].filter((level) => capabilities?.effort?.[level]?.supported === true);
+	if (efforts.length > 0) {
+		model.reasoning = true;
+		model.thinkingLevelMap = { off: null, ...Object.fromEntries(efforts.map((level) => [level, level])) };
+	}
+	if (capabilities?.thinking?.types?.adaptive?.supported === true || id === ANTHROPIC_FALLBACK_MODEL_INFO.id) {
+		model.compat = { ...model.compat, forceAdaptiveThinking: true, supportsTemperature: false };
+	}
+	return model;
+}
+/** Fetch the Anthropic account's currently available models using its OAuth grant. */
+async function fetchAnthropicModels(baseUrl, credential, signal, baselineModels) {
+	if (credential?.type !== "oauth" || typeof credential.access !== "string") throw new Error("Anthropic model refresh requires an OAuth access token");
+	const url = listingUrl(baseUrl, "anthropic-messages");
+	const response = await fetch(url, {
+		headers: {
+			accept: "application/json",
+			authorization: `Bearer ${credential.access}`,
+			"anthropic-version": ANTHROPIC_VERSION,
+			"anthropic-beta": "claude-code-20250219,oauth-2025-04-20",
+			"user-agent": "claude-cli/2.1.251",
+			"x-app": "cli"
+		},
+		signal: AbortSignal.any([signal, AbortSignal.timeout(5e3)]),
+		redirect: "error"
+	});
+	if (!response.ok) throw new Error(`Anthropic model catalog returned HTTP ${response.status}`);
+	const body = await readBounded(response, url);
+	let catalog;
+	try {
+		catalog = JSON.parse(body);
+	} catch (error) {
+		throw new Error("Anthropic model catalog returned invalid JSON", { cause: error });
+	}
+	if (!Array.isArray(catalog?.data)) throw new Error("Anthropic model catalog did not contain a data list");
+	const baselineById = new Map(baselineModels.map((model) => [model.id, model]));
+	const fallbackBaseline = baselineModels.find((model) => model.id.startsWith("claude-sonnet")) ?? baselineModels[0];
+	const models = new Map();
+	for (const info of catalog.data) {
+		if (info === null || typeof info !== "object") continue;
+		const baseline = baselineById.get(info.id) ?? (info.id?.startsWith("claude-sonnet") ? fallbackBaseline : baselineModels.find((model) => model.id.split("-")[1] === info.id?.split("-")[1])) ?? fallbackBaseline;
+		const model = anthropicModelInfo(info, baseline, baseUrl);
+		if (model !== void 0) models.set(model.id, model);
+	}
+	return [...models.values()];
+}
 /**
 * Reuse an installed catalog provider with this route's models and identity.
 * Model dispatch stays with the catalog provider, so its API implementations,
 * compatibility quirks, and ambient credential discovery are preserved exactly.
-* Catalog-owned dynamic refresh is dropped: this route's catalog is the
-* settings document, and a background refresh would contradict it.
+* Codex and Anthropic refresh from their account catalogs, with the bundled
+* catalog kept as a fallback when the network is unavailable.
 */
 function reuseCatalogProvider(base, spec) {
 	const baseUrl = spec.baseURL ?? base.baseUrl;
+	const auth = routeAuth(spec, base);
+	if (spec.provider === "openai-codex") {
+		let liveModels = [];
+		let activeAccountId;
+		let refreshedAt = 0;
+		const astra = spec.models.find((model) => model.id === "gpt-6-astra");
+		const fallbackModels = CODEX_FALLBACK_MODEL_INFO.map((info) => codexModelInfo(info, astra, baseUrl)).filter((model) => model !== void 0);
+		const mergeModels = () => {
+			const models = new Map(spec.models.map((model) => [model.id, model]));
+			for (const model of fallbackModels) if (!models.has(model.id)) models.set(model.id, model);
+			for (const model of liveModels) models.set(model.id, model);
+			return [...models.values()];
+		};
+		return {
+			id: spec.provider,
+			name: spec.displayName,
+			...baseUrl === void 0 ? {} : { baseUrl },
+			auth,
+			getModels: mergeModels,
+			async refreshModels(context) {
+				const credential = context.credential;
+				const accountId = credential?.type === "oauth" && typeof credential.accountId === "string" ? credential.accountId : void 0;
+				if (accountId !== activeAccountId) {
+					const published = await context.publish({ update: () => {
+						activeAccountId = accountId;
+						liveModels = [];
+						refreshedAt = 0;
+					} });
+					if (!published) return;
+				}
+				if (!context.allowNetwork || context.signal.aborted) return;
+				if (accountId === void 0) throw new Error("Codex model refresh requires an OAuth account ID");
+				if (!context.force && Date.now() - refreshedAt < CODEX_MODEL_REFRESH_MS) return;
+				const clientVersion = await currentCodexModelClientVersion(context.signal);
+				const models = await fetchCodexModels(baseUrl, credential, context.signal, spec.models, clientVersion);
+				if (context.signal.aborted) return;
+				await context.publish({ update: () => {
+					liveModels = models;
+					refreshedAt = Date.now();
+				} });
+			},
+			stream: (model, context, options) => base.stream(model, context, options),
+			streamSimple: (model, context, options) => base.streamSimple(model, context, options)
+		};
+	}
+	if (spec.provider === "anthropic") {
+		let liveModels = [];
+		let refreshedAt = 0;
+		const sonnet = spec.models.find((model) => model.id === "claude-sonnet-5") ?? spec.models.find((model) => model.id.startsWith("claude-sonnet")) ?? spec.models[0];
+		const fallbackModel = anthropicModelInfo(ANTHROPIC_FALLBACK_MODEL_INFO, sonnet, baseUrl);
+		const mergeModels = () => {
+			const models = new Map(spec.models.map((model) => [model.id, model]));
+			if (fallbackModel !== void 0 && !models.has(fallbackModel.id)) models.set(fallbackModel.id, fallbackModel);
+			for (const model of liveModels) models.set(model.id, model);
+			return [...models.values()];
+		};
+		return {
+			id: spec.provider,
+			name: spec.displayName,
+			...baseUrl === void 0 ? {} : { baseUrl },
+			auth,
+			getModels: mergeModels,
+			async refreshModels(context) {
+				if (!context.allowNetwork || context.signal.aborted || !baseUrl) return;
+				if (!context.force && Date.now() - refreshedAt < ANTHROPIC_MODEL_REFRESH_MS) return;
+				try {
+					const models = await fetchAnthropicModels(baseUrl, context.credential, context.signal, spec.models);
+					if (context.signal.aborted) return;
+					await context.publish({ update: () => {
+						liveModels = models;
+						refreshedAt = Date.now();
+					} });
+				} catch (error) {
+					if (context.signal.aborted) throw error;
+					refreshedAt = Date.now();
+				}
+			},
+			stream: (model, context, options) => base.stream(model, context, options),
+			streamSimple: (model, context, options) => base.streamSimple(model, context, options)
+		};
+	}
 	return {
 		id: spec.provider,
 		name: spec.displayName,
 		...baseUrl === void 0 ? {} : { baseUrl },
-		auth: routeAuth(spec, base),
+		auth,
 		getModels: () => spec.models,
 		stream: (model, context, options) => base.stream(model, context, options),
 		streamSimple: (model, context, options) => base.streamSimple(model, context, options)
@@ -1383,6 +1641,87 @@ function classifyPiAiError(message) {
 	if (/\b(?:network|connection|socket|fetch)\b|\bECONN[A-Z]+\b/i.test(message) || /\b(?:other side closed|HTTP2 request did not get a response|WebSocket closed unexpectedly)\b/i.test(message) || /\bterminated\b|premature close/i.test(message)) return "TRANSPORT";
 	return "PI_AI_ERROR";
 }
+const ANTHROPIC_OAUTH_REFRESH_INVALID_GRANT = "ANTHROPIC_OAUTH_REFRESH_INVALID_GRANT";
+function nestedErrorText(error, seen = /* @__PURE__ */ new Set()) {
+	if (typeof error === "string") return error;
+	if (typeof error !== "object" || error === null || seen.has(error)) return "";
+	seen.add(error);
+	const parts = [];
+	if (typeof error.message === "string") parts.push(error.message);
+	if (error.cause !== void 0) parts.push(nestedErrorText(error.cause, seen));
+	if (Array.isArray(error.errors)) for (const child of error.errors) parts.push(nestedErrorText(child, seen));
+	return parts.filter(Boolean).join("\n");
+}
+/** Recognize only Anthropic's rejected OAuth refresh grant, never model/API 400s. */
+function isAnthropicRefreshGrantRejected(error, provider) {
+	if (provider !== "anthropic") return false;
+	const text = nestedErrorText(error);
+	return /platform\.claude\.com\/v1\/oauth\/token/i.test(text) && /\bstatus=400\b/i.test(text) && /"error"\s*:\s*"invalid_grant"/i.test(text) && /refresh token not found or invalid/i.test(text);
+}
+/** Keep the Anthropic login URL as a clickable link in the active prompt's question. */
+function anthropicOAuthUrl(rawUrl) {
+	try {
+		const url = new URL(rawUrl);
+		if (url.protocol === "https:" && url.hostname === "claude.ai" && url.pathname === "/oauth/authorize") return url.href;
+	} catch {}
+	return void 0;
+}
+/** Let the active Web surface render pi-ai's OAuth prompt inside the waiting agent turn. */
+function anthropicOAuthInteraction(ctx, agent, signal) {
+	let loginUrl;
+	return {
+		notify(notice) {
+			loginUrl = notice.url === void 0 ? loginUrl : anthropicOAuthUrl(notice.url);
+		},
+		async prompt(prompt) {
+			if (prompt.kind === "secret") throw new Error("Anthropic OAuth requested a secret prompt that the chat surface cannot safely render");
+			const id = "anthropic-oauth-login";
+			const options = "options" in prompt ? prompt.options.map((option) => ({ label: option.label, ...option.description === void 0 ? {} : { description: option.description } })) : void 0;
+			const detail = loginUrl === void 0 ? "Finish signing in to continue this prompt. The prompt will retry automatically after login." : `Finish signing in to continue this prompt. The prompt will retry automatically after login.\n\n[Open Anthropic login](<${loginUrl}>)`;
+			const answer = await ctx.userQuestions.ask({
+				agent,
+				signal: prompt.signal ?? signal,
+				questions: [{
+					id,
+					header: "Anthropic login",
+					question: prompt.message,
+					detail,
+					...options === void 0 ? {} : { options }
+				}]
+			});
+			const response = answer.answers.find((item) => item.id === id);
+			if (response === void 0) throw new Error("Anthropic OAuth prompt was skipped");
+			if ("options" in prompt) {
+				const selected = response.selected[0];
+				return prompt.options.find((option) => option.label === selected)?.id ?? response.custom ?? "";
+			}
+			return response.custom ?? response.selected[0] ?? "";
+		}
+	};
+}
+/** Reauthorize once from the failed prompt, then let the agent loop replay that step. */
+function registerAnthropicOAuthRecovery(ctx) {
+	const lastAttemptByAgent = /* @__PURE__ */ new WeakMap();
+	let activeLogin;
+	const dispose = ctx.on("agent/request-error", (payload, next) => {
+		if (payload.provider !== "anthropic" || payload.failure.code !== ANTHROPIC_OAUTH_REFRESH_INVALID_GRANT) return next();
+		const { agent, signal, turn, step } = payload;
+		if (signal.aborted || agent === void 0) return;
+		const previous = lastAttemptByAgent.get(agent);
+		if (previous?.turn === turn && previous.step === step) return;
+		lastAttemptByAgent.set(agent, { turn, step });
+		if (activeLogin === void 0) activeLogin = ctx.authorization.begin({
+			key: recordKeyFor("anthropic"),
+			method: "oauth",
+			signal,
+			interaction: anthropicOAuthInteraction(ctx, agent, signal)
+		}).then((outcome) => outcome.status === "authorized").catch(() => false).finally(() => {
+			activeLogin = void 0;
+		});
+		return activeLogin.then((authorized) => authorized ? { kind: "retry" } : void 0);
+	});
+	ctx.effect(() => dispose, "llm-pi-ai: Anthropic OAuth prompt recovery");
+}
 /**
 * Map a terminal pi-ai event to the harness finish reason.
 * @param message - the assistant message carried by the `done` or `error` event.
@@ -1393,7 +1732,7 @@ function classifyPiAiError(message) {
 *   `EMPTY_RESPONSE` error, while terminal `pending` and `deferred` states map
 *   to non-retryable `PI_AI_ERROR` failures.
 */
-function mapStopReason(message, contextWindow) {
+function mapStopReason(message, contextWindow, provider) {
 	const piAiOverflow = isContextOverflow(message, contextWindow);
 	const harnessOverflow = message.stopReason === "error" && message.errorMessage !== void 0 && isContextWindowExceededError(message.errorMessage);
 	if (piAiOverflow || harnessOverflow) return {
@@ -1442,7 +1781,7 @@ function mapStopReason(message, contextWindow) {
 				kind: "error",
 				failure: {
 					message: text,
-					code: classifyPiAiError(text)
+					code: isAnthropicRefreshGrantRejected(text, provider) ? ANTHROPIC_OAUTH_REFRESH_INVALID_GRANT : classifyPiAiError(text)
 				}
 			};
 		}
@@ -1460,7 +1799,7 @@ function mapStopReason(message, contextWindow) {
 * @returns the harness chunks, ending with `usage` then `finish`; throws
 *   `LlmError` (`STREAM_CLOSED`) if the source ends without a terminal event.
 */
-async function* toStreamChunks(events, contextWindow, callerSignal, requestedModel) {
+async function* toStreamChunks(events, contextWindow, callerSignal, requestedModel, provider) {
 	const toolIds = /* @__PURE__ */ new Map();
 	for await (const event of events) switch (event.type) {
 		case "start": break;
@@ -1557,7 +1896,7 @@ async function* toStreamChunks(events, contextWindow, callerSignal, requestedMod
 			};
 			yield {
 				type: "finish",
-				reason: mapStopReason(event.message, contextWindow),
+				reason: mapStopReason(event.message, contextWindow, provider),
 				replayState: toPiReplayState(event.message, requestedModel)
 			};
 			return;
@@ -1571,7 +1910,7 @@ async function* toStreamChunks(events, contextWindow, callerSignal, requestedMod
 				reason: mapStopReason(callerSignal?.aborted ? {
 					...event.error,
 					stopReason: "aborted"
-				} : event.error, contextWindow)
+				} : event.error, contextWindow, provider)
 			};
 			return;
 	}
@@ -1791,9 +2130,12 @@ var PiAiAdapter = class extends LlmAdapter {
 		return this.current().profiles.get(provider)?.retryPolicy;
 	}
 	listModels(provider) {
-		return Promise.resolve().then(() => {
+		return Promise.resolve().then(async () => {
 			const snapshot = this.current();
 			this.profileOf(snapshot, provider);
+			const refreshed = await snapshot.models.refresh({ providers: [provider] });
+			const refreshError = refreshed.errors.get(provider);
+			if (refreshError !== void 0 && !isAnthropicRefreshGrantRejected(refreshError, provider)) throw refreshError;
 			return snapshot.models.getModels(provider).map((model) => ({
 				provider,
 				id: model.id,
@@ -1844,12 +2186,12 @@ var PiAiAdapter = class extends LlmAdapter {
 			const profile = this.profileOf(snapshot, options.provider);
 			const model = this.modelOf(snapshot, options.provider, options.model);
 			const reasoning = resolveReasoningLevel(model, options.reasoningEffort ?? profile.reasoning);
-			const apiKey = await this.config.resolveApiKey(options.provider, profile);
 			const consumer = new AbortController();
 			const upstream = options.signal === void 0 ? consumer.signal : AbortSignal.any([options.signal, consumer.signal]);
 			const streamIdleTimeoutMs = profile.streamIdleTimeoutMs;
 			const watchdog = __addDisposableResource(env_1, idleWatchdog(upstream, streamIdleTimeoutMs, "LLM_STREAM_IDLE_TIMEOUT"), false);
 			try {
+				const apiKey = await this.config.resolveApiKey(options.provider, profile);
 				const containsImage = options.messages.some((message) => contentHasImage(message.content));
 				if (containsImage && !model.input.includes("image")) throw new LlmError(`pi-ai model "${model.id}" does not support image input`, "UNSUPPORTED_CONTENT");
 				const attachments = containsImage ? this.config.resolveAttachments?.() : void 0;
@@ -1880,7 +2222,7 @@ var PiAiAdapter = class extends LlmAdapter {
 					...options.sessionId === void 0 ? {} : { sessionId: String(options.sessionId) },
 					signal: watchdog.signal,
 					headers: requestHeaders(profile.headers, options.provider, options.sessionId)
-				}), model.contextWindow, options.signal, model.id)[Symbol.asyncIterator]();
+				}), model.contextWindow, options.signal, model.id, options.provider)[Symbol.asyncIterator]();
 				let exhausted = false;
 				try {
 					while (true) {
@@ -1904,6 +2246,19 @@ var PiAiAdapter = class extends LlmAdapter {
 			} catch (error) {
 				if (timeoutOf(watchdog.signal, "LLM_STREAM_IDLE_TIMEOUT") !== void 0) throw new LlmError(`pi-ai stream idle timeout after ${streamIdleTimeoutMs}ms`, "TIMEOUT", { cause: error });
 				if (options.signal?.aborted) throw new LlmError("pi-ai request aborted by caller", "ABORTED", { cause: error });
+				if (isAnthropicRefreshGrantRejected(error, options.provider)) {
+					yield {
+						type: "finish",
+						reason: {
+							kind: "error",
+							failure: {
+								message: "Anthropic sign-in expired. Sign in again to resume this prompt.",
+								code: ANTHROPIC_OAUTH_REFRESH_INVALID_GRANT
+							}
+						}
+					};
+					return;
+				}
 				throw error;
 			} finally {
 				consumer.abort("pi-ai stream consumer stopped");
@@ -2179,10 +2534,10 @@ function listingUrl(baseURL, api) {
 * anything; the accumulated total is what actually enforces the bound, because
 * a server that under-declares (or streams) tells us nothing up front.
 */
-async function readBounded(response, url) {
-	const oversized = () => new LlmError(`${url} answered with more than ${MAX_RESPONSE_BYTES} bytes`, "DISCOVERY_FAILED");
+async function readBounded(response, url, maxBytes = MAX_RESPONSE_BYTES) {
+	const oversized = () => new LlmError(`${url} answered with more than ${maxBytes} bytes`, "DISCOVERY_FAILED");
 	const declared = Number(response.headers.get("content-length") ?? NaN);
-	if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
+	if (Number.isFinite(declared) && declared > maxBytes) {
 		await response.body?.cancel();
 		throw oversized();
 	}
@@ -2196,7 +2551,7 @@ async function readBounded(response, url) {
 			const { done, value } = await reader.read();
 			if (done) break;
 			total += value.byteLength;
-			if (total > MAX_RESPONSE_BYTES) throw oversized();
+			if (total > maxBytes) throw oversized();
 			chunks.push(value);
 		}
 	} finally {
@@ -2246,7 +2601,7 @@ function readListing(body) {
 		const name = label(entry?.name, entry?.display_name, entry?.displayName) ?? id;
 		const contextWindow = capacity(entry?.contextWindow, entry?.context_window, entry?.context_length, entry?.max_input_tokens, entry?.limit?.context);
 		const maxTokens = capacity(entry?.maxOutputTokens, entry?.max_output_tokens, entry?.maxTokens, entry?.max_tokens, entry?.limit?.output, entry?.top_provider?.max_completion_tokens);
-		const reasoningEfforts = normalizeReasoningEfforts(entry?.reasoningEfforts ?? entry?.reasoning_efforts);
+		const reasoningEfforts = normalizeReasoningEfforts(entry?.reasoningEfforts ?? entry?.reasoning_efforts) ?? reasoningEffortsFromThinkingLevelMap(entry?.thinkingLevelMap);
 		const compat = normalizeCompat(entry?.compat, entry?.interleaved);
 		models.push({
 			id,
@@ -2273,6 +2628,17 @@ function normalizeReasoningEfforts(raw) {
 	for (const value of options.values) if (typeof value === "string" && value.length > 0) efforts[value] = value;
 	return Object.keys(efforts).length === 0 ? void 0 : efforts;
 }
+function reasoningEffortsFromThinkingLevelMap(raw) {
+	if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return void 0;
+	const efforts = {};
+	for (const level of ["minimal", "low", "medium", "high", "xhigh", "max"]) {
+		const wire = raw[level];
+		if (wire === null) continue;
+		if (typeof wire === "string" && wire.length > 0) efforts[level] = wire;
+		else if (wire === void 0 && ["minimal", "low", "medium", "high"].includes(level)) efforts[level] = level;
+	}
+	return Object.keys(efforts).length === 0 ? void 0 : efforts;
+}
 /** Normalize common provider metadata without claiming unknown switches. */
 function normalizeCompat(raw, interleaved) {
 	const compat = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? { ...raw } : {};
@@ -2285,6 +2651,7 @@ function normalizeCompat(raw, interleaved) {
 /** Map Models.dev's SDK identity to the pi-ai wire protocol. */
 function protocolFromSdk(sdk) {
 	if (sdk === "@ai-sdk/anthropic") return "anthropic-messages";
+	if (sdk === "@ai-sdk/google") return "google-generative-ai";
 	if (sdk === "@ai-sdk/openai") return "openai-responses";
 	if (sdk === "@ai-sdk/openai-compatible") return "openai-completions";
 }
@@ -2294,7 +2661,8 @@ function protocolFromSdk(sdk) {
  * must never make an otherwise working provider undiscoverable.
  */
 const MODELS_DEV_URL = "https://models.dev/api.json";
-const MODELS_DEV_CACHE_TTL_MS = 6 * 60 * 60 * 1e3;
+const MODELS_DEV_CACHE_TTL_MS = 5 * 60 * 1e3;
+const PI_MODEL_CATALOG_URL = "https://pi.dev/api/models/providers/";
 let modelsDevCache;
 let modelsDevPromise;
 async function modelsDevCatalog() {
@@ -2314,6 +2682,23 @@ async function modelsDevCatalog() {
 	})();
 	return modelsDevPromise;
 }
+async function piProviderModelCatalog(provider, signal) {
+	if (typeof provider !== "string" || provider.length === 0) return;
+	const url = `${PI_MODEL_CATALOG_URL}${encodeURIComponent(provider)}`;
+	try {
+		const timeout = AbortSignal.timeout(5e3);
+		const response = await fetch(url, {
+			headers: { accept: "application/json" },
+			signal: signal === void 0 ? timeout : AbortSignal.any([signal, timeout])
+		});
+		if (!response.ok) return;
+		const catalog = JSON.parse(await readBounded(response, url));
+		return catalog !== null && typeof catalog === "object" && !Array.isArray(catalog) ? catalog : void 0;
+	} catch (error) {
+		if (signal?.aborted) throw error;
+		return;
+	}
+}
 /** Enrich one endpoint model from the provider-specific registry overlay. */
 function registryModel(catalog, provider, id) {
 	const root = catalog?.data !== null && typeof catalog?.data === "object" ? catalog.data : catalog;
@@ -2326,7 +2711,7 @@ function registryModel(catalog, provider, id) {
 	if (model === null || typeof model !== "object" || Array.isArray(model)) return {};
 	const providerMeta = model.provider;
 	const api = protocolFromSdk(providerMeta?.npm ?? providerEntry.npm);
-	const reasoningEfforts = normalizeReasoningEfforts(model.reasoning_options ?? model.reasoningOptions);
+	const reasoningEfforts = normalizeReasoningEfforts(model.reasoning_options ?? model.reasoningOptions) ?? reasoningEffortsFromThinkingLevelMap(model.thinkingLevelMap);
 	const compat = normalizeCompat(void 0, model.interleaved);
 	const input = Array.isArray(model.modalities?.input) ? model.modalities.input.filter((value) => MODALITIES.includes(value)) : void 0;
 	return {
@@ -2339,12 +2724,46 @@ function registryModel(catalog, provider, id) {
 		...input === void 0 || input.length === 0 ? {} : { input }
 	};
 }
+function piRegistryModel(catalog, id, configuredBaseURL) {
+	const model = catalog?.[id] ?? catalog?.models?.[id];
+	if (model === null || typeof model !== "object" || Array.isArray(model)) return {};
+	const modelBaseURL = typeof model.baseUrl === "string" ? model.baseUrl : typeof model.baseURL === "string" ? model.baseURL : void 0;
+	let sameOriginBaseURL;
+	if (modelBaseURL !== void 0 && configuredBaseURL !== void 0) {
+		try {
+			const modelUrl = new URL(modelBaseURL);
+			const configuredUrl = new URL(configuredBaseURL);
+			// Metadata may update a path, but must not redirect prompts to another host.
+			if ((modelUrl.protocol === "http:" || modelUrl.protocol === "https:") && modelUrl.origin === configuredUrl.origin) sameOriginBaseURL = modelBaseURL;
+		} catch {}
+	}
+	const api = typeof model.api === "string" && supportedProtocols().includes(model.api) ? model.api : void 0;
+	const reasoningEfforts = reasoningEffortsFromThinkingLevelMap(model.thinkingLevelMap);
+	const input = Array.isArray(model.input) ? model.input.filter((value) => MODALITIES.includes(value)) : void 0;
+	const contextWindow = capacity(model.contextWindow, model.context_window);
+	const maxTokens = capacity(model.maxTokens, model.max_tokens);
+	return {
+		...label(model.name) === void 0 ? {} : { name: model.name },
+		...contextWindow === void 0 ? {} : { contextWindow },
+		...maxTokens === void 0 ? {} : { maxTokens },
+		...api === void 0 ? {} : { api },
+		...sameOriginBaseURL === void 0 ? {} : { baseURL: sameOriginBaseURL },
+		...reasoningEfforts === void 0 ? {} : { reasoningEfforts },
+		...input === void 0 || input.length === 0 ? {} : { input }
+	};
+}
 /** Merge endpoint facts first, then the provider-specific registry overlay. */
-async function enrichModels(provider, models) {
+async function enrichModels(provider, models, signal, baseURL) {
 	if (typeof provider !== "string" || provider.length === 0) return models;
-	const catalog = await modelsDevCatalog();
-	if (catalog === void 0) return models;
-	return models.map((model) => ({ ...model, ...registryModel(catalog, provider, model.id) }));
+	const [catalog, piCatalog] = await Promise.all([
+		modelsDevCatalog(),
+		baseURL === void 0 ? void 0 : piProviderModelCatalog(provider, signal)
+	]);
+	return models.map((model) => ({
+		...model,
+		...registryModel(catalog, provider, model.id),
+		...piRegistryModel(piCatalog, model.id, baseURL)
+	}));
 }
 /**
 * Accept one probe key, or refuse it before the header is built. Without this
@@ -2382,7 +2801,7 @@ async function discoverModels(request, storedProfile) {
 			name: model.name,
 			contextWindow: model.contextWindow,
 			maxTokens: model.maxTokens
-		})))
+		})), request.signal, baseURL)
 	}
 	if (baseURL === void 0 || baseURL.length === 0) throw new LlmError(`pi-ai ships no catalog for provider "${request.provider ?? ""}", so its models can only come from its endpoint; set a baseURL, or enter this provider's models by hand`, "DISCOVERY_FAILED");
 	if (!LISTABLE_PROTOCOLS.has(api)) throw new LlmError(`pi-ai protocol "${api}" has no model listing this build can read; enter this provider's models by hand`, "DISCOVERY_UNSUPPORTED");
@@ -2423,7 +2842,7 @@ async function discoverModels(request, storedProfile) {
 		throw new LlmError(`${url} did not answer with JSON`, "DISCOVERY_FAILED", { cause: error });
 	}
 	const listed = readListing(body);
-	return enrichModels(request.provider, listed);
+	return enrichModels(request.provider, listed, request.signal, baseURL);
 }
 //#endregion
 //#region lib/types/login.js
@@ -2720,6 +3139,9 @@ function apply(ctx, config) {
 	});
 	ctx.inject(["authorization"], (authorized) => {
 		registerPiAiFlows(authorized, auth);
+	});
+	ctx.inject(["authorization", "userQuestions"], (authorized) => {
+		registerAnthropicOAuthRecovery(authorized);
 	});
 	let directory;
 	let directoryFacts;

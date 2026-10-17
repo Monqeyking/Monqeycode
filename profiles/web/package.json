@@ -3,6 +3,7 @@
   "private": true,
   "dependencies": {
     "dsh-native-codex-oauth": "github:kfc966/dsh-native-codex-oauth",
+    "@deepseek-ai/dsh-launch-environment": "^0.1.5-rc.2",
     "monqey-code-brand": "link:../../packages/monqey-code-brand",
     "@deepseek-ai/dsh-llm": "link:../../packages/monqey-code-llm",
     "@deepseek-ai/dsh-llm-pi-ai": "link:../../packages/monqey-code-llm-pi-ai",

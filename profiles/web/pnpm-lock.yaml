@@ -11,6 +11,9 @@ importers:
       '@deepseek-ai/dsh-client-ui-settings-models':
         specifier: link:../../packages/monqey-code-ui-settings-models
         version: link:../../packages/monqey-code-ui-settings-models
+      '@deepseek-ai/dsh-launch-environment':
+        specifier: ^0.1.5-rc.2
+        version: 0.1.5-rc.2
       '@deepseek-ai/dsh-llm':
         specifier: link:../../packages/monqey-code-llm
         version: link:../../packages/monqey-code-llm
@@ -32,6 +35,11 @@ importers:
 
 packages:
 
+  '@deepseek-ai/dsh-launch-environment@0.1.5-rc.2':
+    resolution: {integrity: sha512-Cr35kPA3W7skJsPLJhUExLDAjVKCmvJgkog0m8EZ+XdK8RlBDsWiH2peRWFtFOjt8QOOeEkupPs1VDpWORIRyw==}
+    peerDependencies:
+      '@deepseek-ai/cordis': ^4.0.2
+
   dsh-native-codex-oauth@https://codeload.github.com/kfc966/dsh-native-codex-oauth/tar.gz/28273cc4615f2e4cb5a11cf0c57968b68101f737:
     resolution: {gitHosted: true, integrity: sha512-gxd+D59iqRKG9fgyC6S9ln1d+dTorahSq86RIV1JFME/ANiqIlekhZ9STzmskZIXLvx/0EP849Y3L8C5Hb5N+Q==, tarball: https://codeload.github.com/kfc966/dsh-native-codex-oauth/tar.gz/28273cc4615f2e4cb5a11cf0c57968b68101f737}
     version: 0.1.0-alpha.1
@@ -41,6 +49,8 @@ packages:
     resolution: {integrity: sha512-sC95tT5iHHH9gtpj6A81kh+NEaRAUFN+qlUPDUbRfOMvNf5QCBqsb3WgvnpVtK5Y+4UfA6KqufotuTvMGiTlsA==}
 
 snapshots:
+
+  '@deepseek-ai/dsh-launch-environment@0.1.5-rc.2': {}
 
   dsh-native-codex-oauth@https://codeload.github.com/kfc966/dsh-native-codex-oauth/tar.gz/28273cc4615f2e4cb5a11cf0c57968b68101f737:
     dependencies:
