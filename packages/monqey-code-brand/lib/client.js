@@ -255,6 +255,60 @@ window.__ModuleLoader__.load({
       });
     }
 
+    async function executeModeCommand(commands, sessionId, line) {
+      const result = await commands.execute(sessionId, line, []);
+      if (!result?.ok) throw new Error(`${line} failed: ${result?.error?.message ?? "remote error"}`);
+      if (result.value === void 0) throw new Error(`unknown or malformed command: ${line}`);
+      if (result.value.result.kind !== "success") throw new Error(result.value.result.text || `${line} failed`);
+    }
+
+    function ModeControl({ useProjection, sessionId, commands }) {
+      const plan = useProjection("plan");
+      const permissions = useProjection("permissions");
+      const [busy, setBusy] = react.useState(false);
+      const [error, setError] = react.useState(null);
+      if (plan === void 0 || permissions === void 0) return null;
+      const planActive = plan.pending ? !plan.active : plan.active;
+      const current = planActive ? "plan" : "act";
+      const switchMode = async (event) => {
+        const next = event.target.value;
+        const alreadySelected = next === "plan"
+          ? planActive && permissions.currentValue === "read-only"
+          : !planActive && permissions.currentValue === "workspace-write";
+        if (alreadySelected || busy) return;
+        setBusy(true);
+        setError(null);
+        try {
+          const permission = next === "plan" ? "read-only" : "workspace-write";
+          await executeModeCommand(commands, sessionId, `/permission ${permission}`);
+          await executeModeCommand(commands, sessionId, next === "plan" ? "/plan" : "/plan off");
+        } catch (reason) {
+          setError(reason instanceof Error ? reason.message : String(reason));
+        } finally {
+          setBusy(false);
+        }
+      };
+      return jsx("label", {
+        title: "Plan is read-only; Act allows workspace edits.",
+        style: { display: "inline-flex", alignItems: "center", gap: 6, color: "var(--dsw-alias-label-secondary)", fontSize: 12 },
+        children: [
+          jsx("span", { children: "Mode" }),
+          jsx("select", {
+            value: current,
+            disabled: busy,
+            "aria-label": "Agent mode",
+            onChange: switchMode,
+            style: { height: 30, padding: "0 8px", border: 0, borderRadius: 15, background: "var(--dsw-alias-bg-module-platform)", color: "var(--dsw-alias-label-primary)", font: "inherit", cursor: busy ? "default" : "pointer" },
+            children: [
+              jsx("option", { value: "plan", children: "Plan" }),
+              jsx("option", { value: "act", children: "Act" })
+            ]
+          }),
+          error && jsx("span", { role: "status", title: error, style: { color: "var(--dsw-alias-state-error-primary)", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: error })
+        ]
+      });
+    }
+
     const inject = ["slots", "remote", "remote.session", "modelDirectories"];
 
     function apply(ctx) {
@@ -285,6 +339,11 @@ window.__ModuleLoader__.load({
           id: "monqey-code-codex-usage",
           inject: (sessionId) => ({ directory: models.directoryFor(sessionId).store, remote: scope.remote })
         }, CodexUsageLink));
+        scope.slots.inject("conversation.input.left", () => scope.slots.register({
+          name: "conversation.input.left",
+          id: "monqey-code-mode",
+          inject: (sessionId) => ({ sessionId, commands: scope.remote.commands })
+        }, ModeControl));
       });
     }
 
