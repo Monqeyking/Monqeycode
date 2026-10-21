@@ -37,7 +37,7 @@ window.__ModuleLoader__.load({
 
     function BrandName() {
       return jsx("span", {
-        children: "Monqey Code",
+        children: "Monqey Agent",
         style: { whiteSpace: "nowrap" }
       });
     }
@@ -255,6 +255,235 @@ window.__ModuleLoader__.load({
       });
     }
 
+    const QODER_USAGE_URL = "https://qoder.com";
+    const QODER_PROVIDERS = new Set(["qoder"]);
+
+    function formatQuotaValue(value) {
+      if (value === null || value === void 0 || value === "") return "—";
+      return typeof value === "number" ? new Intl.NumberFormat().format(value) : value;
+    }
+
+    function QoderQuota({ label, value }) {
+      if (value === null) return null;
+      const percentage = Number.isFinite(value.percentage) ? Math.round(value.percentage) : null;
+      const used = formatQuotaValue(value.used);
+      const total = formatQuotaValue(value.total);
+      const remaining = formatQuotaValue(value.remaining);
+      return jsx("div", {
+        style: { marginTop: 16 },
+        children: [
+          jsx("div", {
+            style: { display: "flex", justifyContent: "space-between", gap: 12, fontSize: 13, lineHeight: "20px" },
+            children: [
+              jsx("strong", { children: label }),
+              jsx("span", { style: { color: "var(--dsw-alias-label-secondary)" }, children: percentage === null ? `${used} / ${total}` : `${percentage}% used` })
+            ]
+          }),
+          percentage !== null && jsx("div", {
+            "aria-hidden": "true",
+            style: { height: 8, marginTop: 8, background: "rgb(255 255 255 / 10%)", borderRadius: 99, overflow: "hidden" },
+            children: jsx("div", { style: { width: `${percentage}%`, height: "100%", background: "#55ad6c", borderRadius: 99 } })
+          }),
+          jsx("div", {
+            style: { display: "flex", justifyContent: "space-between", gap: 12, marginTop: 6, color: "var(--dsw-alias-label-secondary)", fontSize: 12, lineHeight: "18px" },
+            children: [
+              jsx("span", { children: `Used ${used} / ${total}` }),
+              jsx("span", { children: `Remaining ${remaining}` })
+            ]
+          })
+        ]
+      });
+    }
+
+    function QoderUsageLink({ directory, remote }) {
+      const state = react.useSyncExternalStore((listener) => directory.subscribe(listener), () => directory.getSnapshot(), () => directory.getSnapshot());
+      const [open, setOpen] = react.useState(false);
+      const [usage, setUsage] = react.useState(null);
+      const [loading, setLoading] = react.useState(false);
+      const [error, setError] = react.useState(null);
+      const [claiming, setClaiming] = react.useState(false);
+      const [claimNotice, setClaimNotice] = react.useState(null);
+      const [now, setNow] = react.useState(Date.now);
+      const loadUsage = react.useCallback(async (signal) => {
+        setLoading(true);
+        setError(null);
+        try {
+          const result = await remote?.llm?.getQoderUsage(signal);
+          if (!result?.ok) throw new Error(result?.error?.message ?? "Usage is unavailable");
+          setUsage(result.value);
+        } catch (cause) {
+          if (cause?.name !== "AbortError") {
+            const message = cause?.message ?? "Qoder usage is unavailable right now.";
+            setError(message.includes("No qodercli login found")
+								? "Sign in through Qoder's user menu or run qoder login; daily credits can still be claimed in the Qoder desktop app."
+              : message);
+          }
+        } finally {
+          if (!signal.aborted) setLoading(false);
+        }
+      }, [remote]);
+      const claimReward = async (campaign) => {
+        if (claiming) return;
+        setClaiming(true);
+        setClaimNotice(null);
+        try {
+          const result = await remote.llm.claimQoderReward(campaign.id, new AbortController().signal);
+          if (!result?.ok || result.value?.claimed !== true) throw new Error(result?.error?.message ?? "Qoder did not confirm the reward.");
+          setUsage(value => ({ ...value, campaigns: [] }));
+          setClaimNotice(result.value.alreadyClaimed ? "This reward was already claimed." : "Credits claimed.");
+          await loadUsage(new AbortController().signal);
+        } catch (cause) {
+          setUsage(value => ({ ...value, campaigns: [] }));
+          setClaimNotice(cause?.message ?? "Claim failed. Refresh to check availability.");
+        } finally { setClaiming(false); }
+      };
+      react.useEffect(() => {
+        if (!open) return;
+        const controller = new AbortController();
+        void loadUsage(controller.signal);
+        const timer = setInterval(() => setNow(Date.now()), 15000);
+        const closeOnEscape = (event) => {
+          if (event.key === "Escape") setOpen(false);
+        };
+        document.addEventListener("keydown", closeOnEscape);
+        return () => {
+          clearInterval(timer);
+          controller.abort();
+          document.removeEventListener("keydown", closeOnEscape);
+        };
+      }, [loadUsage, open]);
+      if (!QODER_PROVIDERS.has(state.current?.provider)) return null;
+      return jsx("div", {
+        style: { position: "relative" },
+        children: [
+          jsx("button", {
+            type: "button",
+            onClick: () => setOpen((value) => !value),
+            title: "Open Qoder usage",
+            "aria-label": "Open Qoder usage",
+            "aria-haspopup": "dialog",
+            "aria-expanded": open,
+            style: {
+              display: "inline-flex",
+              alignItems: "center",
+              height: 28,
+              maxWidth: 150,
+              color: "var(--dsw-alias-label-secondary)",
+              background: "transparent",
+              border: 0,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              borderRadius: 8,
+              padding: "0 8px",
+              font: "inherit",
+              fontSize: 13,
+              lineHeight: "20px"
+            },
+            children: jsx("svg", {
+              width: 20, height: 20, viewBox: "0 0 24 24", fill: "none",
+              stroke: "currentColor", strokeWidth: 1.6,
+              strokeLinecap: "round", strokeLinejoin: "round",
+              "aria-hidden": "true",
+              children: [
+                jsx("circle", { cx: 12, cy: 12, r: 9 }),
+                jsx("path", { d: "M6 16a7 7 0 0 1 12 0M12 5v1M6.5 8l.8.8M17.5 8l-.8.8M5 12h1M18 12h1M12 14l3-5" }),
+                jsx("circle", { cx: 12, cy: 14, r: 1 })
+              ]
+            })
+          }),
+          open && jsx("div", {
+            role: "dialog",
+            "aria-label": "Qoder My usage",
+            style: {
+              position: "absolute",
+              left: 0,
+              bottom: "calc(100% + 10px)",
+              zIndex: 1000,
+              boxSizing: "border-box",
+              width: 400,
+              maxWidth: "calc(100vw - 24px)",
+              color: "var(--dsw-alias-label-primary)",
+              background: "var(--dsw-alias-bg-layer-1)",
+              border: "1px solid var(--dsw-alias-border-l3)",
+              borderRadius: 16,
+              boxShadow: "0 16px 40px rgb(0 0 0 / 28%)",
+              overflow: "hidden"
+            },
+            children: [
+              jsx("div", {
+                style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px 12px" },
+                children: [
+                  jsx("strong", { style: { fontSize: 16, lineHeight: "24px" }, children: "My usage" }),
+                  jsx("button", {
+                    type: "button",
+                    onClick: () => setOpen(false),
+                    "aria-label": "Close Qoder usage",
+                    style: { width: 28, height: 28, color: "var(--dsw-alias-label-secondary)", background: "transparent", border: 0, borderRadius: 8, cursor: "pointer", fontSize: 22, lineHeight: "24px" },
+                    children: "×"
+                  })
+                ]
+              }),
+              jsx("div", {
+                style: { padding: "4px 20px 18px" },
+                children: [
+                  jsx("div", {
+                    style: { display: "flex", justifyContent: "space-between", gap: 12, fontSize: 14, fontWeight: 600, lineHeight: "22px" },
+                    children: [
+                      jsx("span", { children: "Qoder usage" }),
+                      usage?.planType && jsx("span", { style: { color: "var(--dsw-alias-label-secondary)", fontSize: 12, fontWeight: 400 }, children: usage.planType })
+                    ]
+                  }),
+                  loading && jsx("p", { style: { color: "var(--dsw-alias-label-secondary)", margin: "12px 0 0", fontSize: 13, lineHeight: "20px" }, children: "Loading current limits…" }),
+                  !loading && error && jsx("p", { style: { color: "var(--dsw-alias-label-secondary)", margin: "12px 0 0", fontSize: 13, lineHeight: "20px" }, children: error }),
+                  !loading && !error && usage && [
+                    jsx(QoderQuota, { key: "plan", label: "Plan credits", value: usage.userQuota }),
+                    jsx(QoderQuota, { key: "addon", label: "Add-on credits", value: usage.addOnQuota }),
+                    jsx(QoderQuota, { key: "org", label: "Organization package", value: usage.orgResourcePackage }),
+                    usage.isQuotaExceeded && jsx("p", { key: "exceeded", role: "status", style: { color: "var(--dsw-alias-state-error-primary)", margin: "14px 0 0", fontSize: 13, lineHeight: "20px" }, children: "The current Qoder quota is exhausted." })
+                  ],
+                  !loading && !error && !usage && jsx("p", { style: { color: "var(--dsw-alias-label-secondary)", margin: "12px 0 0", fontSize: 13, lineHeight: "20px" }, children: "No usage data returned." })
+                ]
+              }),
+              jsx("div", {
+                style: { display: "flex", flexDirection: "column", gap: 8, padding: "14px 20px 16px", borderTop: "1px solid var(--dsw-alias-border-l3)" },
+                children: [
+                  jsx("div", {
+                    style: { display: "flex", gap: 8 },
+                    children: [
+                      jsx("button", {
+                        type: "button",
+                        onClick: () => void loadUsage(new AbortController().signal),
+                        title: "Refresh Qoder usage",
+                        "aria-label": "Refresh Qoder usage",
+                        style: { width: 36, height: 36, color: "var(--dsw-alias-label-secondary)", background: "transparent", border: "1px solid var(--dsw-alias-border-l3)", borderRadius: 10, cursor: "pointer", fontSize: 18 },
+                        children: "↻"
+                      }),
+                      jsx("a", {
+                        href: usage?.detailUrl ?? QODER_USAGE_URL,
+                        target: "_blank",
+                        rel: "noreferrer",
+                        style: { display: "flex", alignItems: "center", justifyContent: "center", flex: 1, height: 36, color: "var(--dsw-alias-label-primary-foreground)", background: "var(--dsw-alias-button-primary-fill)", borderRadius: 10, textDecoration: "none", fontSize: 14, lineHeight: "22px" },
+                        children: "View details ↗"
+                      })
+                    ]
+                  }),
+                  !loading && !error && (usage?.campaigns ?? []).filter(c => c.expiresAt * 1000 > now).map(campaign => jsx("button", {
+                    key: campaign.id, type: "button", disabled: claiming,
+                    onClick: () => void claimReward(campaign),
+                    style: { display: "flex", alignItems: "center", justifyContent: "center", minHeight: 32, color: "var(--dsw-alias-label-secondary)", background: "transparent", border: "1px solid var(--dsw-alias-border-l3)", borderRadius: 9, cursor: claiming ? "wait" : "pointer", fontSize: 13 },
+                    children: claiming ? "Claiming…" : `🎁 Claim ${campaign.amount === null ? "credits" : `${campaign.amount} credits`}`
+                  })),
+                  claimNotice && jsx("span", { role: "status", style: { fontSize: 12 }, children: claimNotice })
+                ]
+              })
+            ]
+          })
+        ]
+      });
+    }
+
     async function executeModeCommand(commands, sessionId, line) {
       const result = await commands.execute(sessionId, line, []);
       if (!result?.ok) throw new Error(`${line} failed: ${result?.error?.message ?? "remote error"}`);
@@ -309,12 +538,137 @@ window.__ModuleLoader__.load({
       });
     }
 
+    function MobileAccessSection() {
+      const bridge = window.monqeyDesktop?.mobileAccess;
+      const [state, setState] = react.useState(null);
+      const [error, setError] = react.useState(null);
+      const [busy, setBusy] = react.useState(false);
+      const lifetime = react.useRef({ mounted: false, busy: false, revision: 0 });
+      react.useEffect(() => {
+        const current = lifetime.current;
+        current.mounted = true;
+        let loading = false;
+        const refresh = async () => {
+          if (!bridge || loading || current.busy) return;
+          loading = true;
+          const revision = current.revision;
+          try {
+            const value = await bridge.getStatus();
+            if (current.mounted && revision === current.revision) { setState(value); setError(null); }
+          } catch {
+            if (current.mounted && revision === current.revision) setError("Mobile access settings could not be loaded.");
+          } finally { loading = false; }
+        };
+        void refresh();
+        const timer = window.setInterval(refresh, 1000);
+        return () => { current.mounted = false; current.revision++; window.clearInterval(timer); };
+      }, [bridge]);
+      const run = async (action, ...args) => {
+        const current = lifetime.current;
+        if (current.busy) return;
+        current.busy = true;
+        current.revision++;
+        setBusy(true);
+        setError(null);
+        try {
+          const value = await bridge[action](...args);
+          if (current.mounted) setState(value);
+        } catch (cause) {
+          if (current.mounted) setError(cause?.message?.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "") || "Mobile access could not be updated.");
+        } finally {
+          current.busy = false;
+          if (current.mounted) setBusy(false);
+        }
+      };
+      const muted = { color: "var(--dsw-alias-label-secondary)", fontSize: 13, lineHeight: "20px" };
+      const card = { border: "1px solid var(--dsw-alias-border-l3)", borderRadius: 12, padding: 18, marginTop: 18 };
+      const buttonStyle = { color: "var(--dsw-alias-label-primary)", background: "var(--dsw-alias-bg-layer-2)", border: "1px solid var(--dsw-alias-border-l3)", borderRadius: 8, padding: "8px 12px", font: "inherit", fontSize: 13 };
+      const button = (label, action, disabled = false) => jsx("button", { type: "button", disabled: disabled || busy, onClick: action, style: { ...buttonStyle, opacity: disabled || busy ? 0.5 : 1, cursor: disabled || busy ? "default" : "pointer" }, children: label });
+      const row = (label, value) => jsx("div", { key: label, style: { display: "flex", justifyContent: "space-between", gap: 16, margin: "10px 0", fontSize: 13 }, children: [jsx("span", { style: muted, children: label }), jsx("span", { style: { overflowWrap: "anywhere", textAlign: "right" }, children: value })] });
+      const serviceLabel = { disabled: "Disabled", connecting: "Connecting…", connected: "Ready", disconnected: "Reconnecting…", unavailable: "Unavailable" };
+      return jsx("section", {
+        "aria-label": "Mobile Access", style: { padding: 24, maxWidth: 680, width: "100%", boxSizing: "border-box" },
+        children: [
+          jsx("h2", { style: { margin: "0 0 8px", fontSize: 20 }, children: "Mobile Access" }),
+          jsx("p", { style: muted, children: "Control your agents from your paired phone. This computer must stay on and Monqey Agent must remain running." }),
+          !bridge && jsx("p", { role: "status", style: muted, children: "Mobile Access requires the updated Monqey Agent desktop app. Quit Monqey Agent from the system tray and reopen the updated app." }),
+          bridge && !state && !error && jsx("p", { style: muted, children: "Loading mobile access…" }),
+          error && jsx("p", { role: "alert", style: muted, children: error }),
+          state && jsx("div", { children: [
+            jsx("div", { style: card, children: [
+              jsx("label", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, fontSize: 14, fontWeight: 600 }, children: [
+                "Enable Mobile Access",
+                jsx("input", { type: "checkbox", role: "switch", "aria-label": "Enable Mobile Access", checked: state.enabled, disabled: busy || (!state.serviceConfigured && !state.enabled), onChange: event => void run("setEnabled", event.target.checked) })
+              ] }),
+              row("Connection service", state.serviceConfigured ? serviceLabel[state.serviceStatus] || "Unavailable" : "Not configured"),
+              !state.serviceConfigured && jsx("p", { role: "status", style: muted, children: "The mobile connection service has not been set up yet. Phone access is not available in this build." }),
+              state.error && jsx("p", { role: "alert", style: muted, children: state.error })
+            ] }),
+            jsx("div", { style: card, children: [
+              jsx("h3", { style: { margin: "0 0 12px", fontSize: 15 }, children: "Paired Device" }),
+              state.device ? jsx("div", { children: [
+                row("Device name", state.device.name), row("Platform", state.device.platform), row("Status", state.device.status),
+                row("Last seen", state.device.lastSeenAt ? new Date(state.device.lastSeenAt).toLocaleString("en-GB") : "Never"),
+                row("Device key", state.device.fingerprint.slice(0, 16)),
+                jsx("p", { style: muted, children: "Only this paired phone can control your agents. Revoking access immediately disconnects it." }),
+                button("Revoke Access", () => void run("revokeAccess"))
+              ] }) : jsx("div", { children: [
+                jsx("p", { style: muted, children: "No phone paired. You can pair one phone at a time." }),
+                button("Pair Phone", () => void run("pairPhone"), !state.enabled || state.serviceStatus !== "connected" || Boolean(state.pairing))
+              ] })
+            ] }),
+            state.pairing && jsx("div", { style: card, children: [
+              jsx("h3", { style: { margin: "0 0 12px", fontSize: 15 }, children: "Pair Phone" }),
+              jsx("p", { style: muted, children: "Scan this code in the Monqey Agent mobile app, then approve your phone below. Keep this code private." }),
+              state.pairing.qrCode && jsx("img", { src: state.pairing.qrCode, width: 256, height: 256, alt: "Phone pairing QR code", style: { maxWidth: "100%", height: "auto", borderRadius: 8 } }),
+              jsx("p", { style: muted, children: `Expires at ${new Date(state.pairing.expiresAt).toLocaleTimeString("en-GB")}` }),
+              state.pendingDevice && jsx("div", { role: "status", children: [
+                jsx("strong", { children: "Allow this phone to control your agents?" }),
+                row("Device name", state.pendingDevice.name), row("Platform", state.pendingDevice.platform),
+                row("Device key", state.pendingDevice.fingerprint.slice(0, 16)),
+                jsx("p", { style: muted, children: "Check that this matches the phone you are pairing." }),
+                jsx("div", { style: { display: "flex", gap: 8, marginBottom: 12 }, children: [
+                  button("Approve Phone", () => void run("approvePhone", state.pendingDevice.id)),
+                  button("Deny", () => void run("cancelPairing"))
+                ] })
+              ] }),
+              button("Cancel Pairing", () => void run("cancelPairing"))
+            ] })
+          ] })
+        ]
+      });
+    }
+
+    function ModelCatalogStatus({ remote }) {
+      const [catalogs, setCatalogs] = react.useState([]);
+      react.useEffect(() => {
+        let disposed = false;
+        const load = async () => {
+          try {
+            const result = await remote.llm.getModelCatalogStatus();
+            if (!disposed && result.ok) setCatalogs(result.value);
+          } catch {}
+        };
+        void load();
+        const unsubscribe = remote.$on("llm/adapters-updated", load);
+        return () => { disposed = true; unsubscribe(); };
+      }, [remote]);
+      const labels = { ready: "Up to date", cached: "Using saved models; provider unavailable", unavailable: "Refresh unavailable", refreshing: "Refreshing…", pending: "Waiting to refresh", "provider-managed": "Provider catalog" };
+      return jsx("div", { style: { color: "var(--dsw-alias-label-secondary)", fontSize: 13 }, children: [
+        jsx("p", { children: "Model lists refresh automatically when Monqey Agent starts. New models appear in the chat and Workers model pickers. Your default model stays the same." }),
+        ...catalogs.map(item => jsx("div", { children: `${item.name}: ${labels[item.state] ?? item.state}${item.lastSuccess ? ` · ${new Date(item.lastSuccess).toLocaleString()}` : ""}` }, item.provider))
+      ] });
+    }
+
     const inject = ["slots", "remote", "remote.session", "modelDirectories"];
 
     function apply(ctx) {
+      ctx.slots.inject("settings.section", () => ctx.slots.register({
+        name: "settings.section", id: "mobile-access", order: 35, label: () => "Mobile Access"
+      }, MobileAccessSection));
       if (typeof document !== "undefined") {
         const setTitle = () => {
-          if (document.title !== "Monqey Code") document.title = "Monqey Code";
+          if (document.title !== "Monqey Agent") document.title = "Monqey Agent";
         };
         ctx.effect(() => {
           setTitle();
@@ -334,11 +688,19 @@ window.__ModuleLoader__.load({
       );
       ctx.inject(["slots", "remote", "remote.llm", "modelDirectories"], (scope) => {
         const models = scope.modelDirectories;
+        scope.slots.inject("settings.models.footer", () => scope.slots.register({
+          name: "settings.models.footer", id: "monqey-model-catalog-status", inject: () => ({ remote: scope.remote })
+        }, ModelCatalogStatus));
         scope.slots.inject("conversation.input.right", () => scope.slots.register({
           name: "conversation.input.right",
           id: "monqey-code-codex-usage",
           inject: (sessionId) => ({ directory: models.directoryFor(sessionId).store, remote: scope.remote })
         }, CodexUsageLink));
+        scope.slots.inject("conversation.input.left", () => scope.slots.register({
+          name: "conversation.input.left",
+          id: "monqey-code-qoder-usage",
+          inject: (sessionId) => ({ directory: models.directoryFor(sessionId).store, remote: scope.remote })
+        }, QoderUsageLink));
         scope.slots.inject("conversation.input.left", () => scope.slots.register({
           name: "conversation.input.left",
           id: "monqey-code-mode",

@@ -2,7 +2,7 @@
   "name": "monqey-code-mcp",
   "version": "1.0.0",
   "private": true,
-  "description": "Generic MCP connections for Monqey Code",
+  "description": "Generic MCP connections for Monqey Agent",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

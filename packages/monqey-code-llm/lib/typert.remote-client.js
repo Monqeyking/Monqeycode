@@ -50,10 +50,38 @@ const _deepseek_ai_dsh_llm_llm_getCodexUsage_result$schema = z.object({
     'balance': z.union([z.string(), z.number(), z.null()]),
   })]),
 })
+const _deepseek_ai_dsh_llm_llm_getQoderUsage_quota$schema = z.object({
+  'total': z.union([z.string(), z.number(), z.null()]),
+  'used': z.union([z.string(), z.number(), z.null()]),
+  'remaining': z.union([z.string(), z.number(), z.null()]),
+  'percentage': z.union([z.number(), z.null()]),
+  'unit': z.union([z.string(), z.null()]),
+})
+const _deepseek_ai_dsh_llm_llm_getQoderUsage_result$schema = z.object({
+  'planType': z.union([z.string(), z.null()]),
+  'userQuota': z.union([z.null(), _deepseek_ai_dsh_llm_llm_getQoderUsage_quota$schema]),
+  'addOnQuota': z.union([z.null(), _deepseek_ai_dsh_llm_llm_getQoderUsage_quota$schema]),
+  'orgResourcePackage': z.union([z.null(), _deepseek_ai_dsh_llm_llm_getQoderUsage_quota$schema]),
+  'detailUrl': z.union([z.string(), z.null()]),
+  'totalUsagePercentage': z.union([z.number(), z.null()]),
+  'isQuotaExceeded': z.boolean(),
+  'campaigns': z.array(z.object({ id: z.string(), amount: z.number().nullable(), expiresAt: z.number() })).optional(),
+})
 
 export const TYPERT_REMOTE = {
   package: '@deepseek-ai/dsh-llm',
   descriptors: [
+    {
+      id: '@deepseek-ai/dsh-llm#llm/getModelCatalogStatus', service: 'llm', namespace: 'llm', method: 'getModelCatalogStatus',
+      invocation: { kind: 'direct' }, parameters: [],
+      result: { mode: 'strict', typeSymbol: '@deepseek-ai/dsh-llm#llm/getModelCatalogStatus:result', schema: z.array(z.object({ provider: z.string(), name: z.string(), state: z.string(), lastSuccess: z.number().nullable() })) }
+    },
+    {
+      id: '@deepseek-ai/dsh-llm#llm/claimQoderReward', service: 'llm', namespace: 'llm', method: 'claimQoderReward',
+      invocation: { kind: 'direct' }, cancellation: { parameter: 'signal' },
+      parameters: [{ name: 'id', wire: 'id', source: 'json', codec: { mode: 'strict', typeSymbol: '@deepseek-ai/dsh-llm#llm/claimQoderReward:id', schema: z.string() } }],
+      result: { mode: 'strict', typeSymbol: '@deepseek-ai/dsh-llm#llm/claimQoderReward:result', schema: z.object({ claimed: z.boolean(), alreadyClaimed: z.boolean() }) }
+    },
     {
       id: '@deepseek-ai/dsh-llm#llm/getCodexUsage',
       service: 'llm',
@@ -69,6 +97,22 @@ export const TYPERT_REMOTE = {
         schema: _deepseek_ai_dsh_llm_llm_getCodexUsage_result$schema,
       },
       sourceLocation: {"file":"packages/llm/llm/src/index.ts","line":650,"column":3},
+    },
+    {
+      id: '@deepseek-ai/dsh-llm#llm/getQoderUsage',
+      service: 'llm',
+      namespace: 'llm',
+      method: 'getQoderUsage',
+      invocation: { kind: 'direct' },
+      parameters: [
+      ],
+      cancellation: { parameter: 'signal' },
+      result: {
+        mode: 'strict',
+        typeSymbol: '@deepseek-ai/dsh-llm#llm/getQoderUsage:result',
+        schema: _deepseek_ai_dsh_llm_llm_getQoderUsage_result$schema,
+      },
+      sourceLocation: {"file":"packages/llm/llm/src/index.ts","line":700,"column":3},
     },
     {
       id: '@deepseek-ai/dsh-llm#llm/discoverModels',

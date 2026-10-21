@@ -233,6 +233,7 @@ export declare class LlmRuntime extends TypertRemoteService {
     private directory;
     private discoveries;
     constructor(ctx: Context);
+    getModelCatalogStatus(): { provider: string; name: string; state: string; lastSuccess: number | null }[];
     /** Notify topology observers without letting one broken listener veto the commit. */
     private emitAdaptersUpdated;
     /** Contained-listener diagnostic shared by the sync and async failure paths. */

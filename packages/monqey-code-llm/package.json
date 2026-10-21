@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-llm",
-  "description": "Monqey Code LLM service contract with discovery metadata preservation",
+  "description": "Monqey Agent LLM service contract with discovery metadata preservation",
   "version": "0.1.5-rc.2",
   "publishConfig": {
     "access": "public"
@@ -46,11 +46,14 @@
       "types": "./lib/typert.remote-client.d.ts",
       "default": "./lib/typert.remote-client.js"
     },
+    "./live-model-catalog": "./lib/live-model-catalog.js",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/index.js",
+    "lib/live-model-catalog.js",
+    "lib/qoder-campaigns.js",
     "lib/invariant.js",
     "lib/types/**/*.js",
     "lib/types/**/*.d.ts",

@@ -5,13 +5,40 @@ import type {
 } from '@deepseek-ai/dsh-typert-protocol'
 import type { LlmConfigurableProvider, LlmDiscoveredModel, LlmModelDiscoveryRequest, LlmProviderInfo } from '@deepseek-ai/dsh-llm/types'
 
+export interface ModelCatalogStatus { provider: string; name: string; state: string; lastSuccess: number | null }
+
+export interface QoderUsageQuota {
+  total: string | number | null
+  used: string | number | null
+  remaining: string | number | null
+  percentage: number | null
+  unit: string | null
+}
+
+export interface QoderUsage {
+  planType: string | null
+  userQuota: QoderUsageQuota | null
+  addOnQuota: QoderUsageQuota | null
+  orgResourcePackage: QoderUsageQuota | null
+  detailUrl: string | null
+  totalUsagePercentage: number | null
+  isQuotaExceeded: boolean
+  campaigns?: { id: string; amount: number | null; expiresAt: number }[]
+}
+
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface TypertRemoteNamespace$6c6c6d {
+    getModelCatalogStatus: () => Promise<RemoteResult<ModelCatalogStatus[]>>
+    claimQoderReward: (id: string, signal?: AbortSignal) => Promise<RemoteResult<{ claimed: boolean; alreadyClaimed: boolean }>>
+    getQoderUsage: (signal?: AbortSignal) => Promise<RemoteResult<QoderUsage>>
     discoverModels: (settingsNs: string, request: LlmModelDiscoveryRequest, signal?: AbortSignal) => Promise<RemoteResult<LlmDiscoveredModel[]>>
     listConfigurableProviders: () => Promise<RemoteResult<LlmConfigurableProvider[]>>
     listProviders: () => Promise<RemoteResult<LlmProviderInfo[]>>
   }
   interface TypertRemoteMap {
+    'llm/getModelCatalogStatus': () => Promise<RemoteResult<ModelCatalogStatus[]>>
+    'llm/claimQoderReward': (id: string, signal?: AbortSignal) => Promise<RemoteResult<{ claimed: boolean; alreadyClaimed: boolean }>>
+    'llm/getQoderUsage': (signal?: AbortSignal) => Promise<RemoteResult<QoderUsage>>
     'llm/discoverModels': (settingsNs: string, request: LlmModelDiscoveryRequest, signal?: AbortSignal) => Promise<RemoteResult<LlmDiscoveredModel[]>>
     'llm/listConfigurableProviders': () => Promise<RemoteResult<LlmConfigurableProvider[]>>
     'llm/listProviders': () => Promise<RemoteResult<LlmProviderInfo[]>>

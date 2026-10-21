@@ -76,14 +76,14 @@ window.__ModuleLoader__.load({
         }
       }, [revision, saving, snapshot.revision, snapshot.value]);
 
-      if (snapshot.status === 'unavailable') return jsx('div', { style: panelStyle, children: 'Notification settings are unavailable. Restart Monqey Code and try again.' });
+      if (snapshot.status === 'unavailable') return jsx('div', { style: panelStyle, children: 'Notification settings are unavailable. Restart Monqey Agent and try again.' });
 
       const update = (key) => (event) => setDraft((value) => ({ ...value, [key]: event.target.checked }));
       const save = async () => {
         setSaving(true);
         setMessage('');
         try {
-          if (draft.desktopNotifications && typeof window.Notification === 'function' && window.Notification.permission === 'default') {
+          if (draft.desktopNotifications && !window.monqeyDesktop?.notify && typeof window.Notification === 'function' && window.Notification.permission === 'default') {
             await window.Notification.requestPermission();
           }
           await scope.set('enabled', draft.enabled);
@@ -100,12 +100,12 @@ window.__ModuleLoader__.load({
 
       return jsxs('div', { style: panelStyle, children: [
         jsx('h2', { style: { margin: 0 }, children: 'Notifications' }),
-        jsx('p', { style: mutedStyle, children: 'Show a Monqey Code popup when the agent finishes or needs your input.' }),
+        jsx('p', { style: mutedStyle, children: 'Show a Monqey Agent popup when the agent finishes or needs your input.' }),
         jsxs('div', { style: cardStyle, children: [
           jsx('label', { style: rowStyle, children: [jsx('input', { type: 'checkbox', checked: draft.enabled, onChange: update('enabled') }), 'Enable notifications'] }),
           jsx('label', { style: rowStyle, children: [jsx('input', { type: 'checkbox', checked: draft.notifyOnCompletion, onChange: update('notifyOnCompletion'), disabled: !draft.enabled }), 'Notify when generation is complete'] }),
           jsx('label', { style: rowStyle, children: [jsx('input', { type: 'checkbox', checked: draft.notifyOnQuestion, onChange: update('notifyOnQuestion'), disabled: !draft.enabled }), 'Notify when input is required'] }),
-          jsx('label', { style: rowStyle, children: [jsx('input', { type: 'checkbox', checked: draft.desktopNotifications, onChange: update('desktopNotifications'), disabled: !draft.enabled }), 'Also use desktop notifications when Monqey Code is hidden'] })
+          jsx('label', { style: rowStyle, children: [jsx('input', { type: 'checkbox', checked: draft.desktopNotifications, onChange: update('desktopNotifications'), disabled: !draft.enabled }), 'Also use desktop notifications when Monqey Agent is hidden'] })
         ] }),
         jsxs('div', { style: { display: 'flex', gap: 10, alignItems: 'center' }, children: [
           jsx('button', { type: 'button', style: { ...buttonStyle, background: '#6957ff', borderColor: '#6957ff' }, disabled: saving, onClick: save, children: saving ? 'Saving…' : 'Save changes' }),
@@ -129,9 +129,17 @@ window.__ModuleLoader__.load({
         || Object.values(sessionState.jobsBySession ?? {}).some((jobs) => jobs.some((job) => job.status === 'running' || job.status === 'stopping'))
         || pending.size > 0;
       const previousSessions = React.useRef(null);
-      const previousPending = React.useRef(null);
+      const previousPending = React.useRef(new Map());
       const [toasts, setToasts] = React.useState([]);
       const [unreadCount, setUnreadCount] = React.useState(0);
+      const pendingCount = settings.enabled && settings.notifyOnQuestion ? pending.size : 0;
+
+      React.useEffect(() => {
+        window.monqeyDesktop?.setPendingAttention?.(pendingCount);
+        if (!pendingCount) setToasts(items => items.filter(item => !item.requiresInput));
+      }, [pendingCount]);
+
+      React.useEffect(() => () => window.monqeyDesktop?.setPendingAttention?.(0), []);
 
       React.useEffect(() => {
         window.monqeyDesktop?.setTaskbarBadge?.(unreadCount);
@@ -147,13 +155,17 @@ window.__ModuleLoader__.load({
         return () => window.removeEventListener('focus', clearBadge);
       }, []);
 
-      const addToast = React.useCallback((title, body) => {
+      const addToast = React.useCallback((title, body, requiresInput = false) => {
         const id = `${Date.now()}-${Math.random()}`;
-        setUnreadCount((count) => Math.min(99, count + 1));
-        setToasts((items) => [...items, { id, title, body }].slice(-3));
+        if (!requiresInput) setUnreadCount((count) => Math.min(99, count + 1));
+        setToasts((items) => [...items, { id, title, body, requiresInput }].slice(-3));
         window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), 8000);
-        if (settings.desktopNotifications && document.visibilityState === 'hidden' && typeof window.Notification === 'function' && window.Notification.permission === 'granted') {
-          new window.Notification(title, { body });
+        if (settings.desktopNotifications) {
+          if (window.monqeyDesktop?.notify) window.monqeyDesktop.notify({ title, body, requiresInput });
+          else if ((document.visibilityState === 'hidden' || !document.hasFocus()) && typeof window.Notification === 'function' && window.Notification.permission === 'granted') {
+            const notification = new window.Notification(title, { body });
+            notification.onclick = () => { window.focus(); notification.close(); };
+          }
         }
       }, [settings.desktopNotifications]);
 
@@ -165,23 +177,20 @@ window.__ModuleLoader__.load({
         }
         if (settings.enabled && settings.notifyOnCompletion) {
           for (const [id, running] of current) {
-            if (previousSessions.current.get(id) === true && !running) addToast('Generation complete', 'Monqey Code has finished working.');
+            if (previousSessions.current.get(id) === true && !running && !pending.has(id)) addToast('Generation complete', 'Monqey Agent has finished working.');
           }
         }
         previousSessions.current = current;
-      }, [addToast, sessions, settings.enabled, settings.notifyOnCompletion]);
+      }, [addToast, sessions, pending, settings.enabled, settings.notifyOnCompletion]);
 
       React.useEffect(() => {
         const current = new Map([...pending].map(([sessionId, interaction]) => [`${sessionId}:${interaction.key}`, interaction]));
-        if (previousPending.current === null) {
-          previousPending.current = current;
-          return;
-        }
         if (settings.enabled && settings.notifyOnQuestion) {
           for (const [key, interaction] of current) {
             if (!previousPending.current.has(key)) {
               const question = interaction.questions?.[0]?.question;
-              addToast('Input required', question || 'Monqey Code is waiting for your answer.');
+              if (interaction.kind === 'approval') addToast('Goedkeuring nodig', 'Een opdracht wacht op jouw goedkeuring. Open Monqey Agent om te reageren.', true);
+              else addToast('Input required', question || 'Monqey Agent is waiting for your answer.', true);
             }
           }
         }
@@ -203,7 +212,7 @@ window.__ModuleLoader__.load({
         name: 'shell.overlay',
         id: 'monqey-code-notifications',
         order: 100,
-        label: 'Monqey Code notifications'
+        label: 'Monqey Agent notifications'
       }, (props) => jsx(NotificationOverlay, { ...props, scope })));
       ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
         name: 'settings.plugins.tab',

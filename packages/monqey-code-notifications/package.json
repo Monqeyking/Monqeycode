@@ -2,7 +2,7 @@
   "name": "monqey-code-notifications",
   "version": "1.0.0",
   "private": true,
-  "description": "Monqey Code completion and input notifications",
+  "description": "Monqey Agent completion and input notifications",
   "type": "module",
   "main": "lib/index.js",
   "exports": {

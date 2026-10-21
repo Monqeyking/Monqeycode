@@ -1518,6 +1518,7 @@ window.__ModuleLoader__.load({
 			const disabled = props.readOnly || busy;
 			const layout = layoutOf(namespace.ns);
 			const knownBaseURL = props.provider === "opencode-go" ? OPENCODE_GO_BASE_URL : void 0;
+			const oauthOnly = props.provider === "qoder";
 			const keyRef = refFor(schema, namespace, settingsPath, props.provider);
 			const protocols = (0, react.useMemo)(() => layout === "pi-ai" ? protocolChoices(namespace, schema) : [], [
 				layout,
@@ -1661,7 +1662,7 @@ window.__ModuleLoader__.load({
 						setDraft((current) => schema.deletePath(current, ["models"]));
 					}
 				};
-				return (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsxs)("div", {
+				return (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [oauthOnly ? null : (0, react_jsx_runtime.jsxs)("div", {
 					className: ModelsSection_module_css_default["field"],
 					children: [
 						(0, react_jsx_runtime.jsx)("span", {
@@ -1688,7 +1689,7 @@ window.__ModuleLoader__.load({
 							children: t(shownKeyFailure)
 						})
 					]
-				}), props.credentialOnly === true ? null : (0, react_jsx_runtime.jsxs)("details", {
+					}), oauthOnly || props.credentialOnly === true ? null : (0, react_jsx_runtime.jsxs)("details", {
 					className: ModelsSection_module_css_default["customized"],
 					children: [(0, react_jsx_runtime.jsx)("summary", {
 						className: ModelsSection_module_css_default["customizedSummary"],

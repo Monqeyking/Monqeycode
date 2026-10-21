@@ -1,4 +1,6 @@
 import { launchEnvironmentOf } from "@deepseek-ai/dsh-launch-environment";
+import { LiveModelCatalog } from "@deepseek-ai/dsh-llm/live-model-catalog";
+import { qoderReasoning, qoderModelPolicy } from "./qoder-reasoning.js";
 import { CONTEXT_WINDOW_EXCEEDED_CODE, EMPTY_RESPONSE_CODE, INVALID_CREDENTIAL_CODE, LlmAdapter, LlmError, QUOTA_EXCEEDED_CODE, ReasoningEffortId, RetryPolicySchema, assertUsableApiKey, attributionHeaders, contentHasImage, isContextWindowExceededError, isQuotaExceededError, normalizeApiKey, offloadRequestImagesWithPolicy, offloadedImageText, requestImageHandleText, resolveImageAttachmentAccess, resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
 import { deepEqualJson } from "@deepseek-ai/dsh-util-values";
 import { createModels, createProvider, getSupportedThinkingLevels, isContextOverflow } from "@earendil-works/pi-ai";
@@ -11,9 +13,13 @@ import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messag
 import { googleGenerativeAIApi } from "@earendil-works/pi-ai/api/google-generative-ai.lazy";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { access } from "node:fs/promises";
-import { resolve } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 //#region lib/types/replay.js
 /**
 * Durable pi-ai replay metadata and assistant-history reconstruction.
@@ -828,26 +834,275 @@ const CODEX_VERSION_CACHE_MS = 60 * 60 * 1e3;
 let codexModelClientVersion;
 let codexModelClientVersionAt = 0;
 const ANTHROPIC_MODEL_REFRESH_MS = 5 * 60 * 1e3;
-const ANTHROPIC_FALLBACK_MODEL_INFO = {
-	id: "claude-sonnet-5-5",
-	display_name: "Claude Sonnet 5.5 (latest)",
-	input: ["text", "image"],
-	cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
-	reasoning: true,
-	thinkingLevelMap: { off: null },
-	max_input_tokens: 1_000_000,
-	max_tokens: 128_000
-};
 const CODEX_REASONING_LEVELS = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
-const CODEX_FALLBACK_MODEL_INFO = ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"].map((slug) => ({
-	slug,
-	display_name: slug === "gpt-6.1-sol" ? "GPT-6.1 Sol" : slug === "gpt-6-sol" ? "GPT-6 Sol" : "GPT-6 Luna",
-	visibility: "list",
-	supported_in_api: true,
-	input_modalities: ["text", "image"],
-	context_window: 272_000,
-	supported_reasoning_levels: ["low", "medium", "high", "xhigh", "max"].map((effort) => ({ effort }))
-}));
+const QODER_PROVIDER_ID = "qoder";
+const QODER_MODEL_REFRESH_MS = 5 * 60 * 1e3;
+const QODER_MODEL_BASE = {
+	api: "openai-completions",
+	provider: QODER_PROVIDER_ID,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 262144,
+	maxTokens: 32768
+};
+/**
+ * Qoder has a built-in OAuth route; its SDK supplies the model catalog.
+ */
+const QODER_DEFAULT_PROFILE = {
+	displayName: "Qoder",
+	api: "openai-completions",
+	// The Qoder adapter never sends requests to this URL; it dispatches through
+	// the local Agent SDK. The private scheme only satisfies the generic
+	// profile validator for this built-in route.
+	baseURL: "qoder://oauth",
+	models: []
+};
+let qoderSdkPromise;
+function loadQoderSdk() {
+	qoderSdkPromise ??= import("@qoder-ai/qoder-agent-sdk").catch(() => {
+		const require = createRequire(resolve(process.cwd(), "package.json"));
+		return import(pathToFileURL(require.resolve("@qoder-ai/qoder-agent-sdk")).href);
+	});
+	return qoderSdkPromise;
+}
+function qoderSdkPackageRoot() {
+	try {
+		const require = createRequire(resolve(process.cwd(), "package.json"));
+		return dirname(require.resolve("@qoder-ai/qoder-agent-sdk/package.json"));
+	} catch {
+		return void 0;
+	}
+}
+function qoderBundledCliPath() {
+	const configured = [process.env.MONQEY_QODER_CLI_PATH, process.env.QODERCLI_PATH].find((value) => typeof value === "string" && value.trim().length > 0);
+	if (configured) return configured.trim();
+	const root = qoderSdkPackageRoot();
+	if (!root) return void 0;
+	const names = process.platform === "win32" ? ["qoder.exe", "qodercli.exe"] : ["qoder", "qodercli"];
+	return names.map((name) => join(root, "dist", "_bundled", name)).find((candidate) => existsSync(candidate));
+}
+function qoderSdkOptions(sdk, options = {}) {
+	const runtimePath = typeof process.env.MONQEY_QODER_WORKER_RUNTIME_PATH === "string" ? process.env.MONQEY_QODER_WORKER_RUNTIME_PATH.trim() : "";
+	const transport = runtimePath && typeof sdk.WorkerTransport === "function"
+		? new sdk.WorkerTransport({ pathToQoderWorkerRuntime: runtimePath })
+		: void 0;
+	return {
+		auth: sdk.qodercliAuth(),
+		...options,
+		...transport !== void 0 && options.transport === void 0 ? { transport } : {}
+	};
+}
+/** A never-ending prompt lets the SDK initialize without starting a model turn. */
+function qoderNoPrompt() {
+	let release;
+	const prompt = (async function* () {
+		await new Promise((resolve) => {
+			release = resolve;
+		});
+	})();
+	return { prompt, release: () => release?.() };
+}
+/** Run a short-lived authenticated SDK session and always release its worker. */
+async function withQoderQuery(callback, options = {}) {
+	const sdk = await loadQoderSdk();
+	if (typeof sdk.query !== "function" || typeof sdk.qodercliAuth !== "function") throw new Error("Qoder Agent SDK does not expose local OAuth authentication");
+	const input = qoderNoPrompt();
+	let query;
+	try {
+		query = sdk.query({
+			prompt: input.prompt,
+			options: qoderSdkOptions(sdk, { settingSources: [], ...options })
+		});
+		await query.initializationResult();
+		return await callback(query);
+	} finally {
+		input.release();
+		try {
+			await query?.close?.();
+		} catch {
+			// The returned catalog or authorization result is already detached.
+		}
+	}
+}
+function qoderModelFromCatalog(info, fallback) {
+	const id = typeof info?.modelId === "string" && info.modelId.length > 0 ? info.modelId : typeof info?.value === "string" ? info.value : "";
+	if (id.length === 0 || info?.isEnabled === false) return void 0;
+	// The current bridge sends a text transcript to the Qoder Agent SDK. Keep
+	// the advertised capability honest until the SDK bridge carries images.
+	const input = ["text"];
+	return {
+		...fallback,
+		id,
+		name: typeof info.displayName === "string" && info.displayName.length > 0 ? info.displayName : fallback?.name ?? id,
+		api: "openai-completions",
+		provider: QODER_PROVIDER_ID,
+		input,
+		...qoderReasoning(info),
+		contextWindow: Number.isSafeInteger(info.maxInputTokens) && info.maxInputTokens > 0 ? info.maxInputTokens : fallback?.contextWindow ?? 262144,
+		maxTokens: Number.isSafeInteger(info.maxOutputTokens) && info.maxOutputTokens > 0 ? info.maxOutputTokens : fallback?.maxTokens ?? 32768,
+		cost: fallback?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+	};
+}
+async function fetchQoderModels(signal) {
+	signal?.throwIfAborted();
+	const controller = new AbortController();
+	const abort = () => controller.abort(signal.reason);
+	signal?.addEventListener("abort", abort, { once: true });
+	try {
+		return await withQoderQuery((query) => query.getAvailableModels({ fetchStrategy: "live" }), { abortController: controller });
+	} finally { signal?.removeEventListener("abort", abort); controller.abort(); }
+}
+/** Convert the pi-ai context into one text-only Qoder model prompt. */
+function qoderPrompt(context) {
+	const lines = [];
+	if (typeof context.systemPrompt === "string" && context.systemPrompt.length > 0) lines.push("SYSTEM:\n" + context.systemPrompt);
+	for (const message of context.messages ?? []) {
+		const role = message.role === "toolResult" ? "TOOL RESULT" : String(message.role).toUpperCase();
+		const content = Array.isArray(message.content) ? message.content.map((block) => {
+			if (block.type === "text") return block.text;
+			if (block.type === "toolCall") return `[tool call ${block.name}] ${JSON.stringify(block.arguments)}`;
+			if (block.type === "toolResult") return block.content?.map((item) => item.type === "text" ? item.text : "").join("") ?? "";
+			return "";
+		}).filter(Boolean).join("\n") : String(message.content ?? "");
+		if (content.length > 0) lines.push(`${role}:\n${content}`);
+	}
+	return [
+		"You are the selected Qoder model inside Monqey Agent.",
+		"Answer the latest user request directly. Do not edit files, run commands, or use Qoder's own tools; Monqey Agent owns those actions.",
+		"The following is the conversation context:",
+		lines.join("\n\n")
+	].join("\n\n");
+}
+function qoderTextContent(content) {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text).join("");
+}
+function qoderUsage(usage) {
+	const inputTokens = Number.isFinite(Number(usage?.input_tokens)) ? Number(usage.input_tokens) : 0;
+	const outputTokens = Number.isFinite(Number(usage?.output_tokens)) ? Number(usage.output_tokens) : 0;
+	return {
+		inputTokens,
+		outputTokens,
+		...inputTokens + outputTokens > 0 ? { totalTokens: inputTokens + outputTokens } : {}
+	};
+}
+/** Stream one Qoder SDK answer as provider-neutral Monqey chunks. */
+async function* qoderStreamChunks(options, context, signal, reasoning) {
+	const controller = new AbortController();
+	const abort = () => controller.abort(signal?.reason);
+	if (signal?.aborted) abort();
+	else signal?.addEventListener("abort", abort, { once: true });
+	let blockStarted = false;
+	let text = "";
+	let finalUsage;
+	let result;
+	let query;
+	try {
+		const sdk = await loadQoderSdk();
+		query = sdk.query({
+			prompt: qoderPrompt(context),
+			options: qoderSdkOptions(sdk, {
+				abortController: controller,
+				model: options.model,
+				...reasoning === void 0 ? {} : { resolveModel: qoderModelPolicy(options.model, reasoning) },
+				cwd: process.cwd(),
+				settingSources: [],
+				includePartialMessages: true,
+				maxTurns: 1,
+				tools: [],
+				disallowedTools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "Task", "WebFetch", "WebSearch"],
+				permissionMode: "default",
+				canUseTool: async () => ({ behavior: "deny", message: "Monqey Agent owns tool execution for this conversation." })
+			})
+		});
+		for await (const message of query) {
+			if (message.type === "stream_event") {
+				const event = message.event;
+				const delta = event?.delta;
+				if (event?.type === "content_block_delta" && delta?.type === "text_delta" && typeof delta.text === "string") {
+					if (!blockStarted) {
+						blockStarted = true;
+						yield { type: "block-start", index: 0, blockType: "text" };
+					}
+					text += delta.text;
+					yield { type: "text-delta", index: 0, text: delta.text };
+				}
+				continue;
+			}
+			if (message.type === "assistant") {
+				const assistantText = qoderTextContent(message.message?.content);
+				if (!blockStarted && assistantText.length > 0) text = assistantText;
+				if (message.message?.usage !== void 0) finalUsage = message.message.usage;
+				continue;
+			}
+			if (message.type === "result") {
+				result = message;
+				finalUsage = message.usage ?? finalUsage;
+			}
+		}
+		if (!blockStarted && text.length === 0 && typeof result?.result === "string") text = result.result;
+		if (!blockStarted && text.length > 0) {
+			yield { type: "block-start", index: 0, blockType: "text" };
+			yield { type: "text-delta", index: 0, text };
+			blockStarted = true;
+		}
+		if (blockStarted) yield { type: "block-end", index: 0, block: { type: "text", text } };
+		yield { type: "usage", usage: qoderUsage(finalUsage) };
+		if (result?.is_error === true) {
+			yield {
+				type: "finish",
+				reason: {
+					kind: "error",
+					failure: { message: result.errors?.join("\n") || "Qoder returned an error", code: "QODER_ERROR" }
+				}
+			};
+			return;
+		}
+		yield { type: "finish", reason: { kind: result?.stop_reason === "max_tokens" ? "max-tokens" : "stop" } };
+	} finally {
+		signal?.removeEventListener("abort", abort);
+		controller.abort();
+		try {
+			await query?.close?.();
+		} catch {
+			// The stream result is already complete.
+		}
+	}
+}
+/** Qoder is an OAuth-backed local Agent SDK route, not an OpenAI-compatible URL. */
+function createQoderProvider(spec) {
+	let liveModels = [];
+	let refreshedAt = 0;
+	const mergeModels = () => {
+		return liveModels;
+	};
+	return {
+		id: QODER_PROVIDER_ID,
+		name: spec.displayName,
+		// pi-ai gates catalog refresh on a credential; Qoder authenticates inside
+		// its SDK instead. This internal marker never leaves the collection.
+		auth: { apiKey: { resolve: async () => ({ auth: { apiKey: "qoder-sdk-local-auth" } }) } },
+		getModels: mergeModels,
+		async refreshModels(context) {
+			if (!context.allowNetwork || context.signal.aborted || !context.force && Date.now() - refreshedAt < QODER_MODEL_REFRESH_MS) return;
+			try {
+				const catalog = await fetchQoderModels(context.signal);
+				if (context.signal.aborted) return;
+				const baseline = QODER_MODEL_BASE;
+				const next = catalog.map((info) => qoderModelFromCatalog(info, baseline)).filter((model) => model !== void 0);
+				await context.publish({ update: () => {
+					liveModels = next;
+					refreshedAt = Date.now();
+				} });
+			} catch (error) {
+				if (liveModels.length === 0) throw error;
+			}
+		},
+		stream: () => { throw new Error("Qoder requests are dispatched by the Monqey Agent Qoder adapter"); },
+		streamSimple: () => { throw new Error("Qoder requests are dispatched by the Monqey Agent Qoder adapter"); }
+	};
+}
 /** Convert one visible Codex model into pi-ai metadata, keeping richer catalog facts when known. */
 function codexModelInfo(info, baseline, baseUrl) {
 	const id = typeof info.slug === "string" ? info.slug.trim() : "";
@@ -1009,11 +1264,8 @@ function reuseCatalogProvider(base, spec) {
 		let liveModels = [];
 		let activeAccountId;
 		let refreshedAt = 0;
-		const astra = spec.models.find((model) => model.id === "gpt-6-astra");
-		const fallbackModels = CODEX_FALLBACK_MODEL_INFO.map((info) => codexModelInfo(info, astra, baseUrl)).filter((model) => model !== void 0);
 		const mergeModels = () => {
 			const models = new Map(spec.models.map((model) => [model.id, model]));
-			for (const model of fallbackModels) if (!models.has(model.id)) models.set(model.id, model);
 			for (const model of liveModels) models.set(model.id, model);
 			return [...models.values()];
 		};
@@ -1052,11 +1304,8 @@ function reuseCatalogProvider(base, spec) {
 	if (spec.provider === "anthropic") {
 		let liveModels = [];
 		let refreshedAt = 0;
-		const sonnet = spec.models.find((model) => model.id === "claude-sonnet-5") ?? spec.models.find((model) => model.id.startsWith("claude-sonnet")) ?? spec.models[0];
-		const fallbackModel = anthropicModelInfo(ANTHROPIC_FALLBACK_MODEL_INFO, sonnet, baseUrl);
 		const mergeModels = () => {
 			const models = new Map(spec.models.map((model) => [model.id, model]));
-			if (fallbackModel !== void 0 && !models.has(fallbackModel.id)) models.set(fallbackModel.id, fallbackModel);
 			for (const model of liveModels) models.set(model.id, model);
 			return [...models.values()];
 		};
@@ -1069,17 +1318,12 @@ function reuseCatalogProvider(base, spec) {
 			async refreshModels(context) {
 				if (!context.allowNetwork || context.signal.aborted || !baseUrl) return;
 				if (!context.force && Date.now() - refreshedAt < ANTHROPIC_MODEL_REFRESH_MS) return;
-				try {
-					const models = await fetchAnthropicModels(baseUrl, context.credential, context.signal, spec.models);
-					if (context.signal.aborted) return;
-					await context.publish({ update: () => {
-						liveModels = models;
-						refreshedAt = Date.now();
-					} });
-				} catch (error) {
-					if (context.signal.aborted) throw error;
+				const models = await fetchAnthropicModels(baseUrl, context.credential, context.signal, spec.models);
+				if (context.signal.aborted) return;
+				await context.publish({ update: () => {
+					liveModels = models;
 					refreshedAt = Date.now();
-				}
+				} });
 			},
 			stream: (model, context, options) => base.stream(model, context, options),
 			streamSimple: (model, context, options) => base.streamSimple(model, context, options)
@@ -1102,6 +1346,7 @@ function reuseCatalogProvider(base, spec) {
 * @throws Error when the route names a wire protocol this build cannot serve.
 */
 function buildProvider(spec) {
+	if (spec.provider === QODER_PROVIDER_ID) return createQoderProvider(spec);
 	const catalog = catalogProvider(spec.provider);
 	if (catalog !== void 0 && spec.api === void 0) return reuseCatalogProvider(catalog, spec);
 	const apis = [...new Set(spec.models.map((model) => model.api ?? spec.api).filter((api) => api !== void 0))];
@@ -1318,7 +1563,12 @@ function resolveProfiles(providers, validation = "strict") {
 	if (Array.isArray(providers)) throw new Error("llm-pi-ai: providers is now a dict keyed by provider route, not an array of profiles");
 	const entries = Object.entries(providers ?? {});
 	const resolved = /* @__PURE__ */ new Map();
-	for (const [provider, source] of entries) {
+	for (const [provider, configured] of entries) {
+		const source = provider === QODER_PROVIDER_ID ? {
+			...QODER_DEFAULT_PROFILE,
+			...configured,
+			models: []
+		} : configured;
 		rejectRemovedFields(provider, source);
 		if (provider.length === 0) throw new Error("llm-pi-ai: provider names must be non-empty");
 		if (source.baseURL !== void 0 && source.baseURL.length === 0) throw new Error(`llm-pi-ai: provider "${provider}" has an empty baseURL`);
@@ -1339,7 +1589,7 @@ function resolveProfiles(providers, validation = "strict") {
 		let piProvider;
 		let catalogError;
 		try {
-			catalog = resolveRouteModels({
+			catalog = provider === QODER_PROVIDER_ID ? { models: [], configuredMaxTokens: new Map(), modelErrors: new Map() } : resolveRouteModels({
 				provider,
 				...source.api === void 0 ? {} : { api: source.api },
 				...source.baseURL === void 0 ? {} : { baseURL: source.baseURL },
@@ -1366,6 +1616,7 @@ function resolveProfiles(providers, validation = "strict") {
 		const { apiKeyEnv, retryPolicy, models: _models, displayName: _displayName, ...rest } = source;
 		resolved.set(provider, {
 			...rest,
+			source,
 			provider,
 			displayName,
 			...apiKeyEnv === void 0 ? {} : { apiKeyEnv: credentialRef(apiKeyEnv) },
@@ -2101,13 +2352,17 @@ var PiAiAdapter = class extends LlmAdapter {
 		for (const profile of profiles.values()) if (profile.piProvider !== void 0) models.setProvider(profile.piProvider);
 		this.snapshot = {
 			profiles,
-			models
+			models,
+			liveProfiles: new Map(),
+			catalogs: new Map(),
+			nativeRefreshes: new Map(),
+			catalogStatus: new Map()
 		};
 		return this.snapshot;
 	}
 	/** The profile for one route within one snapshot, or the not-owned failure. */
 	profileOf(snapshot, provider) {
-		const profile = snapshot.profiles.get(provider);
+		const profile = snapshot.liveProfiles.get(provider) ?? snapshot.profiles.get(provider);
 		if (profile === void 0) throw new LlmError(`pi-ai adapter does not own provider "${provider}"`, "NO_ADAPTER");
 		return profile;
 	}
@@ -2117,8 +2372,73 @@ var PiAiAdapter = class extends LlmAdapter {
 		const failure = profile.modelErrors.get(model) ?? (profile.piProvider === void 0 ? profile.catalogError : void 0);
 		if (failure !== void 0) throw new LlmError(failure, "INVALID_CONFIG");
 		const resolved = snapshot.models.getModel(provider, model);
-		if (resolved === void 0) throw new LlmError(`pi-ai provider "${provider}" has no configured model "${model}"`, "UNKNOWN_MODEL");
+		if (resolved === void 0) throw new LlmError(provider === QODER_PROVIDER_ID
+			? `Qoder no longer lists the selected model "${model}". Select a current Qoder model from the chat model dropdown and retry.`
+			: `pi-ai provider "${provider}" has no configured model "${model}"`, "UNKNOWN_MODEL");
 		return resolved;
+	}
+	async refreshQoderCatalog(snapshot, provider, signal) {
+		if (provider !== QODER_PROVIDER_ID) return;
+		const refreshed = await snapshot.models.refresh({ providers: [provider], signal });
+		if (signal?.aborted) throw signal.reason ?? new LlmError("Qoder model refresh aborted", "ABORTED");
+		const error = refreshed.errors.get(provider);
+		if (error !== void 0) throw error;
+	}
+	async refreshModelCatalog(provider, request = {}) {
+		const snapshot = this.current();
+		const profile = snapshot.profiles.get(provider);
+		if (!profile) return;
+		const baseURL = profile.baseURL ?? profile.piProvider?.baseUrl;
+		const api = profile.api ?? sharedCatalogApi(new Map(snapshot.models.getModels(provider).map(model => [model.id, model])));
+		if ([QODER_PROVIDER_ID, "openai-codex", "anthropic"].includes(provider) || !baseURL || !LISTABLE_PROTOCOLS.has(api) || !this.config.discoverLiveModels) {
+			if (!profile.piProvider?.refreshModels) {
+				snapshot.catalogStatus.set(provider, { state: "provider-managed", lastSuccess: null });
+				return;
+			}
+			let entry = snapshot.nativeRefreshes.get(provider);
+			if (entry?.pending) return entry.pending;
+			if (!request.force && entry && Date.now() - entry.attemptedAt < (entry.error ? 30000 : 300000)) return;
+			entry = { attemptedAt: Date.now(), error: false };
+			snapshot.nativeRefreshes.set(provider, entry);
+			const previousSuccess = snapshot.catalogStatus.get(provider)?.lastSuccess ?? null;
+			snapshot.catalogStatus.set(provider, { state: "refreshing", lastSuccess: previousSuccess });
+			entry.pending = Promise.resolve().then(async () => {
+				const timeout = AbortSignal.timeout(15000);
+				const signal = request.signal ? AbortSignal.any([request.signal, timeout]) : timeout;
+				const refreshed = await snapshot.models.refresh({ providers: [provider], ...request, signal });
+				const error = refreshed.errors.get(provider) ?? (refreshed.aborted ? new Error("Model refresh timed out or was cancelled.") : undefined);
+				entry.error = Boolean(error);
+				snapshot.catalogStatus.set(provider, { state: error ? snapshot.models.getModels(provider).length ? "cached" : "unavailable" : "ready", lastSuccess: error ? previousSuccess : Date.now() });
+				if (error && !snapshot.models.getModels(provider).length) throw error;
+			}).finally(() => { entry.pending = null; });
+			return entry.pending;
+		}
+		let cache = snapshot.catalogs.get(provider);
+		if (!cache) {
+			cache = new LiveModelCatalog(provider, [baseURL, api, profile.apiKeyEnv, profile.headers]);
+			snapshot.catalogs.set(provider, cache);
+		}
+		const found = await cache.refresh(signal => this.config.discoverLiveModels({ provider, baseURL, api, signal }, profile), request);
+		if (!found.length) return;
+		if (cache.published === found) return;
+		const { modelOverrides = {}, ...source } = profile.source;
+		const configured = new Map((source.models ?? Object.entries(modelOverrides).map(([id, override]) => ({ id, ...override }))).map(model => [model.id, model]));
+		const merged = new Map(configured);
+		for (const model of found) {
+			// A catalog cannot redirect a configured route's credentials elsewhere.
+			const { baseURL: _remoteEndpoint, ...metadata } = model;
+			merged.set(model.id, { ...metadata, ...modelOverrides[model.id], ...configured.get(model.id) });
+		}
+		const next = resolveProfiles({ [provider]: { ...source, baseURL, models: [...merged.values()] } }, "deferred").get(provider);
+		if (!next?.piProvider) throw new Error("Refreshed catalog has no usable models.");
+		snapshot.liveProfiles.set(provider, next);
+		snapshot.models.setProvider(next.piProvider);
+		cache.published = found;
+	}
+	modelCatalogStatus(provider) {
+		const snapshot = this.current();
+		const status = snapshot.catalogs.get(provider)?.status() ?? snapshot.catalogStatus.get(provider) ?? { state: "pending", lastSuccess: null };
+		return status.state === "unavailable" && snapshot.models.getModels(provider).length ? { ...status, state: "cached" } : status;
 	}
 	providerInfo(provider) {
 		return {
@@ -2133,9 +2453,8 @@ var PiAiAdapter = class extends LlmAdapter {
 		return Promise.resolve().then(async () => {
 			const snapshot = this.current();
 			this.profileOf(snapshot, provider);
-			const refreshed = await snapshot.models.refresh({ providers: [provider] });
-			const refreshError = refreshed.errors.get(provider);
-			if (refreshError !== void 0 && !isAnthropicRefreshGrantRejected(refreshError, provider)) throw refreshError;
+			try { await this.refreshModelCatalog(provider); }
+			catch (error) { if (!snapshot.models.getModels(provider).length) throw error; }
 			return snapshot.models.getModels(provider).map((model) => ({
 				provider,
 				id: model.id,
@@ -2145,8 +2464,9 @@ var PiAiAdapter = class extends LlmAdapter {
 		});
 	}
 	resolveModel(provider, model, _signal) {
-		return Promise.resolve().then(() => {
+		return Promise.resolve().then(async () => {
 			const snapshot = this.current();
+			await this.refreshQoderCatalog(snapshot, provider, _signal);
 			return this.modelInfo(snapshot, provider, model);
 		});
 	}
@@ -2165,12 +2485,13 @@ var PiAiAdapter = class extends LlmAdapter {
 			...reasoningInfo(resolvedModel, defaultLevel)
 		};
 	}
-	prepareCall(provider, model, _signal) {
+	async prepareCall(provider, model, _signal) {
 		const snapshot = this.current();
-		return Promise.resolve({
+		await this.refreshQoderCatalog(snapshot, provider, _signal);
+		return {
 			model: this.modelInfo(snapshot, provider, model),
 			stream: (options) => this.streamWithSnapshot(options, snapshot)
-		});
+		};
 	}
 	stream(options) {
 		return this.streamWithSnapshot(options, this.current());
@@ -2183,6 +2504,7 @@ var PiAiAdapter = class extends LlmAdapter {
 		};
 		try {
 			if (options.stop !== void 0) throw new LlmError("llm-pi-ai does not support GenerateOptions.stop", "UNSUPPORTED_OPTION");
+			await this.refreshQoderCatalog(snapshot, options.provider, options.signal);
 			const profile = this.profileOf(snapshot, options.provider);
 			const model = this.modelOf(snapshot, options.provider, options.model);
 			const reasoning = resolveReasoningLevel(model, options.reasoningEffort ?? profile.reasoning);
@@ -2191,7 +2513,6 @@ var PiAiAdapter = class extends LlmAdapter {
 			const streamIdleTimeoutMs = profile.streamIdleTimeoutMs;
 			const watchdog = __addDisposableResource(env_1, idleWatchdog(upstream, streamIdleTimeoutMs, "LLM_STREAM_IDLE_TIMEOUT"), false);
 			try {
-				const apiKey = await this.config.resolveApiKey(options.provider, profile);
 				const containsImage = options.messages.some((message) => contentHasImage(message.content));
 				if (containsImage && !model.input.includes("image")) throw new LlmError(`pi-ai model "${model.id}" does not support image input`, "UNSUPPORTED_CONTENT");
 				const attachments = containsImage ? this.config.resolveAttachments?.() : void 0;
@@ -2215,6 +2536,11 @@ var PiAiAdapter = class extends LlmAdapter {
 						maxBytes: profile.requestImageMaxBytes
 					}
 				}, onReplayDegrade);
+				if (options.provider === QODER_PROVIDER_ID) {
+					yield* qoderStreamChunks(options, context, watchdog.signal, reasoning);
+					return;
+				}
+				const apiKey = await this.config.resolveApiKey(options.provider, profile);
 				const iterator = toStreamChunks(snapshot.models.streamSimple(model, context, {
 					...profileOptions(profile, reasoning, apiKey),
 					...options.temperature === void 0 ? {} : { temperature: options.temperature },
@@ -2789,6 +3115,13 @@ function usableProbeKey(raw) {
 *   refuses or fails the request, or the reply is not a model listing.
 */
 async function discoverModels(request, storedProfile) {
+	if (request.provider === QODER_PROVIDER_ID) {
+		return (await fetchQoderModels(request.signal))
+			.map((info) => qoderModelFromCatalog(info, QODER_MODEL_BASE))
+			.filter((model) => model !== void 0)
+			.map((model) => ({ id: model.id, name: model.name, contextWindow: model.contextWindow, maxTokens: model.maxTokens,
+				reasoningEfforts: reasoningEffortsFromThinkingLevelMap(model.thinkingLevelMap) }));
+	}
 	const installed = request.provider === void 0 ? /* @__PURE__ */ new Map() : catalogModels(request.provider);
 	const baseURL = request.baseURL?.trim();
 	const api = request.api ?? "openai-completions";
@@ -2821,6 +3154,7 @@ async function discoverModels(request, storedProfile) {
 		response = await fetch(url, {
 			method: "GET",
 			headers,
+			redirect: "error",
 			...request.signal === void 0 ? {} : { signal: request.signal }
 		});
 	} catch (error) {
@@ -2950,6 +3284,97 @@ function restate(prompt) {
 		};
 	}
 }
+const QODER_LOGIN_URL_PATTERN = /https:\/\/qoder\.com\/device\/selectAccounts\?[^\s"'<>]+/i;
+function launchQoderLogin(signal, onUrl) {
+	const executable = qoderBundledCliPath();
+	if (!executable) return Promise.reject(new Error("The bundled Qoder CLI is not available in this Monqey Agent build."));
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		let output = "";
+		let lastUrl;
+		const child = spawn(executable, ["login"], {
+			cwd: process.cwd(),
+			env: { ...process.env },
+			stdio: ["ignore", "pipe", "pipe"],
+			windowsHide: false,
+			shell: process.platform === "win32" && /\.(cmd|bat)$/i.test(executable)
+		});
+		const relayOutput = (chunk) => {
+			output = `${output}${String(chunk)}`.slice(-8192);
+			const url = output.match(QODER_LOGIN_URL_PATTERN)?.[0];
+			if (url !== void 0 && url !== lastUrl) {
+				lastUrl = url;
+				onUrl?.(url);
+			}
+		};
+		child.stdout?.on("data", relayOutput);
+		child.stderr?.on("data", relayOutput);
+		const finish = (error) => {
+			if (settled) return;
+			settled = true;
+			signal?.removeEventListener("abort", abort);
+			if (error) reject(error);
+			else resolve();
+		};
+		const abort = () => {
+			try {
+				child.kill();
+			} catch {}
+			finish(signal?.reason ?? new Error("Qoder login was cancelled."));
+		};
+		child.once("error", (error) => finish(error));
+		child.once("exit", (code, exitSignal) => {
+			if (code === 0) finish();
+			else finish(new Error(`Qoder login exited with ${exitSignal ? `signal ${exitSignal}` : `code ${code ?? "unknown"}`}.`));
+		});
+		if (signal?.aborted) abort();
+		else signal?.addEventListener("abort", abort, { once: true });
+	});
+}
+/** Register Qoder's local OAuth session as a value-free Monqey credential. */
+function registerQoderFlow(ctx) {
+	ctx.authorization.registerFlow({
+		key: recordKeyFor(QODER_PROVIDER_ID),
+		label: "Qoder",
+		methods: [{ id: "oauth", label: "Connect Qoder" }],
+		async run(session) {
+			try {
+				await withQoderQuery(() => true);
+			} catch (firstError) {
+				if (qoderBundledCliPath()) {
+					session.notify({ message: "Qoder is not connected yet. Monqey Agent opens the official Qoder browser login now." });
+					let loginUrl;
+					try {
+						await launchQoderLogin(session.signal, (url) => {
+							loginUrl = url;
+							session.notify({
+								message: "Qoder login is open. If your browser did not open, use this link to sign in.",
+								url
+							});
+						});
+						await withQoderQuery(() => true);
+					} catch (loginError) {
+						session.notify({
+							message: loginUrl === void 0
+								? "Qoder login did not complete. Please try Connect Qoder again."
+								: "Qoder login did not complete. Finish the browser login, then press Connect Qoder again."
+						});
+						throw loginError ?? firstError;
+					}
+				} else {
+					session.notify({
+						message: "This development build does not contain the bundled Qoder login helper yet. Build Monqey Agent with the Qoder runtime package, or sign in through QoderCLI and press Connect Qoder again."
+					});
+					throw firstError;
+				}
+			}
+			await writableStore(ctx).modifyRecord(recordKeyFor(QODER_PROVIDER_ID), async () => ({
+				kind: "grant",
+				payload: { type: "qodercli" }
+			}));
+		}
+	});
+}
 /**
 * Register one authorization flow per installed provider that ships a login.
 *
@@ -3068,12 +3493,12 @@ function registrationFacts(profiles) {
 	})).sort((left, right) => left.provider.localeCompare(right.provider));
 }
 /**
-* The configurable-provider directory: every installed catalog route, plus
-* every route the current profiles declare. A hand-declared route has no
-* catalog entry, so without this union it would have no settings address and
-* configuration surfaces could neither show nor edit it.
+ * The configurable-provider directory: every installed catalog route, plus
+ * every user-managed route the current profiles declare. Qoder is included as
+ * a built-in OAuth route so it can be selected from the Models page, while its
+ * synthetic profile keeps it out of the default-model setting.
 * @param profiles - the currently resolved provider profiles.
-* @returns the directory entries in catalog order, declared routes last.
+* @returns the directory entries in stable alphabetical display order.
 */
 function directoryEntries(profiles) {
 	const catalog = new Set(catalogProviderIds());
@@ -3089,10 +3514,12 @@ function directoryEntries(profiles) {
 		});
 	};
 	for (const provider of catalog) declare(provider, provider);
-	for (const [provider, profile] of profiles) declare(provider, profile.displayName, profile.catalogError);
-	return [...entries.values()];
+	for (const [provider, profile] of profiles) {
+		declare(provider, profile.displayName, profile.catalogError);
+	}
+	return [...entries.values()].sort((left, right) => left.displayName.localeCompare(right.displayName, void 0, { sensitivity: "base" }) || left.provider.localeCompare(right.provider));
 }
-/** Register one generic pi-ai adapter for all configured provider routes. */
+/** Register one generic pi-ai adapter for configured routes and built-in Qoder. */
 function apply(ctx, config) {
 	let current = () => config;
 	let lastRaw;
@@ -3109,7 +3536,7 @@ function apply(ctx, config) {
 	const profiles = () => {
 		const raw = current();
 		if (raw === lastRaw && memoized !== void 0) return memoized;
-		const next = resolveProfiles(raw.providers, "deferred");
+		const next = resolveProfiles({ [QODER_PROVIDER_ID]: {}, ...raw.providers }, "deferred");
 		lastRaw = raw;
 		memoized = next;
 		return next;
@@ -3130,6 +3557,7 @@ function apply(ctx, config) {
 	const adapter = new PiAiAdapter({
 		profiles,
 		resolveApiKey,
+		discoverLiveModels: (request, profile) => discoverModels(request, () => ({ headers: profile.headers, resolveApiKey: () => resolveApiKey(request.provider, profile) })),
 		auth,
 		resolveAttachments: () => ctx.get("attachments"),
 		resolveImageAccess: (attachments, ref) => resolveImageAttachmentAccess(attachments, (hostPath) => ctx.get("fs")?.processPathFromHostPath(hostPath), ref),
@@ -3138,6 +3566,7 @@ function apply(ctx, config) {
 		}
 	});
 	ctx.inject(["authorization"], (authorized) => {
+		registerQoderFlow(authorized);
 		registerPiAiFlows(authorized, auth);
 	});
 	ctx.inject(["authorization", "userQuestions"], (authorized) => {

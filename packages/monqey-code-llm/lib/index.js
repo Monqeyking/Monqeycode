@@ -1,4 +1,7 @@
 import { createRequire } from "node:module";
+import { installDeepSeekLiveCatalog } from "./live-model-catalog.js";
+import { getQoderCampaigns, claimQoderCampaign } from "./qoder-campaigns.js";
+import { pathToFileURL } from "node:url";
 import { Remote, RemoteError, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import { assertNever, deepFreeze, snapshotJsonValue } from "@deepseek-ai/dsh-util-values";
 import { randomUUID } from "@deepseek-ai/dsh-util-crypto";
@@ -1716,6 +1719,83 @@ function codexUsageView(body) {
 		credits
 	};
 }
+const QODER_USAGE_TIMEOUT_MS = 10 * 1e3;
+let qoderSdkPromise;
+function loadQoderSdk() {
+	qoderSdkPromise ??= import("@qoder-ai/qoder-agent-sdk").catch(() => {
+		const require = createRequire(`${process.cwd()}\\package.json`);
+		return import(pathToFileURL(require.resolve("@qoder-ai/qoder-agent-sdk")).href);
+	});
+	return qoderSdkPromise;
+}
+function qoderQuotaValue(value) {
+	return typeof value === "string" || typeof value === "number" ? value : null;
+}
+function qoderQuotaView(value) {
+	if (value === null || typeof value !== "object") return null;
+	const total = qoderQuotaValue(value.total ?? value.limit);
+	const used = qoderQuotaValue(value.used);
+	const remaining = qoderQuotaValue(value.remaining);
+	const rawPercentage = Number(value.percentage ?? value.usedPercentage);
+	const totalNumber = Number(total);
+	const usedNumber = Number(used);
+	const percentage = Number.isFinite(rawPercentage)
+		? Math.max(0, Math.min(100, rawPercentage))
+		: Number.isFinite(totalNumber) && totalNumber > 0 && Number.isFinite(usedNumber)
+			? Math.max(0, Math.min(100, usedNumber / totalNumber * 100))
+			: null;
+	return {
+		total,
+		used,
+		remaining,
+		percentage,
+		unit: typeof value.unit === "string" ? value.unit : null
+	};
+}
+function qoderUsageView(body) {
+	if (body === null || typeof body !== "object") throw new Error("Qoder usage returned an invalid response");
+	return {
+		planType: typeof body.planType === "string" ? body.planType : typeof body.plan_type === "string" ? body.plan_type : null,
+		userQuota: qoderQuotaView(body.userQuota ?? body.user_quota),
+		addOnQuota: qoderQuotaView(body.addOnQuota ?? body.addonQuota ?? body.add_on_quota ?? body.addon_quota),
+		orgResourcePackage: qoderQuotaView(body.orgResourcePackage ?? body.org_resource_package),
+		detailUrl: typeof body.detailUrl === "string" ? body.detailUrl : typeof body.detail_url === "string" ? body.detail_url : null,
+		totalUsagePercentage: Number.isFinite(Number(body.totalUsagePercentage ?? body.total_usage_percentage)) ? Math.max(0, Math.min(100, Number(body.totalUsagePercentage ?? body.total_usage_percentage))) : null,
+		isQuotaExceeded: body.isQuotaExceeded === true
+	};
+}
+function qoderAbortPromise(signal) {
+	return new Promise((_, reject) => {
+		if (signal.aborted) {
+			reject(signal.reason ?? new Error("Qoder usage request was aborted"));
+			return;
+		}
+		signal.addEventListener("abort", () => reject(signal.reason ?? new Error("Qoder usage request was aborted")), { once: true });
+	});
+}
+function qoderNoPrompt() {
+	let release;
+	const prompt = (async function* () {
+		await new Promise((resolve) => {
+			release = resolve;
+		});
+	})();
+	return {
+		prompt,
+		release: () => release?.()
+	};
+}
+function qoderSdkOptions(sdk, options = {}) {
+	const runtimePath = typeof process.env.MONQEY_QODER_WORKER_RUNTIME_PATH === "string" ? process.env.MONQEY_QODER_WORKER_RUNTIME_PATH.trim() : "";
+	const transport = runtimePath && typeof sdk.WorkerTransport === "function"
+		? new sdk.WorkerTransport({ pathToQoderWorkerRuntime: runtimePath })
+		: void 0;
+	return {
+		auth: sdk.qodercliAuth(),
+		...options,
+		...transport !== void 0 && options.transport === void 0 ? { transport } : {}
+	};
+}
 /**
 * The abstract `llm` service: an adapter registry plus a streaming model-call
 * API, interceptable via the `llm/stream` waterfall.
@@ -1727,6 +1807,8 @@ let LlmRuntime = (() => {
 	let _listConfigurableProviders_decorators;
 	let _remoteDiscoverModels_decorators;
 	let _getCodexUsage_decorators;
+	let _getQoderUsage_decorators;
+	let _claimQoderReward_decorators;
 	return class LlmRuntime extends _classSuper {
 		static {
 			const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : void 0;
@@ -1734,6 +1816,8 @@ let LlmRuntime = (() => {
 			_listConfigurableProviders_decorators = [Remote];
 			_remoteDiscoverModels_decorators = [Remote("discoverModels")];
 			_getCodexUsage_decorators = [Remote];
+			_getQoderUsage_decorators = [Remote];
+			_claimQoderReward_decorators = [Remote];
 			__esDecorate(this, null, _listProviders_decorators, {
 				kind: "method",
 				name: "listProviders",
@@ -1778,6 +1862,21 @@ let LlmRuntime = (() => {
 				},
 				metadata: _metadata
 			}, null, _instanceExtraInitializers);
+			__esDecorate(this, null, _getQoderUsage_decorators, {
+				kind: "method",
+				name: "getQoderUsage",
+				static: false,
+				private: false,
+				access: {
+					has: (obj) => "getQoderUsage" in obj,
+					get: (obj) => obj.getQoderUsage
+				},
+				metadata: _metadata
+			}, null, _instanceExtraInitializers);
+			__esDecorate(this, null, _claimQoderReward_decorators, {
+				kind: "method", name: "claimQoderReward", static: false, private: false,
+				access: { has: obj => "claimQoderReward" in obj, get: obj => obj.claimQoderReward }, metadata: _metadata
+			}, null, _instanceExtraInitializers);
 			if (_metadata) Object.defineProperty(this, Symbol.metadata, {
 				enumerable: true,
 				configurable: true,
@@ -1790,6 +1889,40 @@ let LlmRuntime = (() => {
 		discoveries = /* @__PURE__ */ new Map();
 		constructor(ctx) {
 			super(ctx, "llm");
+			const controller = new AbortController();
+			const warmed = new Map();
+			let timer;
+			let running = false;
+			const warm = async () => {
+				if (running || controller.signal.aborted) return;
+				running = true;
+				try {
+					const queue = [...this.adapters.entries()].filter(([provider, registration]) => warmed.get(provider) !== registration);
+					if (!queue.length) return;
+					await Promise.all([0, 1].map(async () => {
+						while (queue.length && !controller.signal.aborted) {
+							const [provider, registration] = queue.shift();
+							warmed.set(provider, registration);
+							try {
+								await registration.adapter.refreshModelCatalog?.(provider, { force: true, signal: controller.signal });
+								await this.listModels(provider);
+							} catch { ctx.logger.warn(`Model catalog refresh failed for ${provider}; retaining available saved models.`); }
+						}
+					}));
+					if (!controller.signal.aborted) this.emitAdaptersUpdated();
+				} finally {
+					running = false;
+					if (!controller.signal.aborted && [...this.adapters.entries()].some(([provider, registration]) => warmed.get(provider) !== registration)) schedule();
+				}
+			};
+			const schedule = () => { clearTimeout(timer); timer = setTimeout(() => void warm(), 250); timer.unref?.(); };
+			ctx.on("llm/adapters-updated", schedule);
+			ctx.on("credentials/reference-updated", () => { warmed.clear(); schedule(); });
+			ctx.on("dispose", () => { clearTimeout(timer); controller.abort(); });
+		}
+		getModelCatalogStatus() {
+			return this.listProviders().map(provider => ({ provider: provider.id, name: provider.name,
+				...(this.registration(provider.id).adapter.modelCatalogStatus?.(provider.id) ?? { state: "provider-managed", lastSuccess: null }) }));
 		}
 		/** Read the current account limits without returning the stored OAuth grant. */
 		async getCodexUsage(signal) {
@@ -1824,6 +1957,44 @@ let LlmRuntime = (() => {
 			}
 			throw new RemoteError("gateway/internal", "Codex usage endpoint was not available", {});
 		}
+		/** Read Qoder account quota through the official local Qoder CLI session. */
+		async getQoderUsage(signal) {
+			const requestSignal = signal === void 0 ? AbortSignal.timeout(QODER_USAGE_TIMEOUT_MS) : AbortSignal.any([signal, AbortSignal.timeout(QODER_USAGE_TIMEOUT_MS)]);
+			let sdk;
+			try {
+				sdk = await loadQoderSdk();
+			} catch (error) {
+				throw new RemoteError("gateway/internal", "Qoder Agent SDK is not available", {}, { cause: error });
+			}
+			if (typeof sdk.query !== "function" || typeof sdk.qodercliAuth !== "function") throw new RemoteError("gateway/internal", "Qoder Agent SDK does not expose local authentication", {});
+			let query;
+			const input = qoderNoPrompt();
+			try {
+				query = sdk.query({
+					prompt: input.prompt,
+					options: qoderSdkOptions(sdk)
+				});
+				await Promise.race([query.initializationResult(), qoderAbortPromise(requestSignal)]);
+				const usage = await Promise.race([query.getUsageInfo(), qoderAbortPromise(requestSignal)]);
+				let campaigns = [];
+				try { campaigns = await getQoderCampaigns(requestSignal); } catch { /* Unknown campaign status must hide the claim button. */ }
+				return { ...qoderUsageView(usage), campaigns };
+			} catch (error) {
+				if (error instanceof RemoteError) throw error;
+				throw new RemoteError("gateway/internal", error?.message ?? "Qoder usage is unavailable", {}, { cause: error });
+			} finally {
+				input.release();
+				try {
+					await query?.close?.();
+				} catch {
+					// Usage is already detached from the temporary SDK session.
+				}
+			}
+		}
+		async claimQoderReward(id, signal) {
+			try { return await claimQoderCampaign(id, signal); }
+			catch (error) { throw new RemoteError("gateway/internal", error.message, {}); }
+		}
 		/** Notify topology observers without letting one broken listener veto the commit. */
 		emitAdaptersUpdated() {
 			let invariantFailure;
@@ -1855,6 +2026,7 @@ let LlmRuntime = (() => {
 		* @returns the disposer, carrying {@link AdapterRegistrationHandle.replace}.
 		*/
 		registerAdapter(providers, adapter) {
+			if (providers.includes("deepseek-official")) installDeepSeekLiveCatalog(adapter, attributionHeaders());
 			const owned = /* @__PURE__ */ new Set();
 			let released = false;
 			const dispose = this.ctx.effect(function* () {
@@ -1921,7 +2093,7 @@ let LlmRuntime = (() => {
 		* @returns detached provider metadata in registration order.
 		*/
 		listProviders() {
-			return [...this.adapters.values()].map(({ provider }) => ({ ...provider }));
+			return [...this.adapters.values()].map(({ provider }) => ({ ...provider })).sort((a, b) => a.name.localeCompare(b.name, void 0, { sensitivity: "base" }) || a.id.localeCompare(b.id));
 		}
 		/**
 		* Declare provider routes an adapter plugin can activate through
@@ -1983,7 +2155,7 @@ let LlmRuntime = (() => {
 			return [...this.directory.values()].map((entry) => ({
 				...entry,
 				settingsPath: [...entry.settingsPath]
-			}));
+			})).sort((a, b) => a.displayName.localeCompare(b.displayName, void 0, { sensitivity: "base" }) || a.provider.localeCompare(b.provider));
 		}
 		/**
 		* Offer to interrogate provider endpoints on behalf of the settings

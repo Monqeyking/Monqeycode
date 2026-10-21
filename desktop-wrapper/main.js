@@ -1,8 +1,12 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Tray } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, safeStorage, Tray } = require('electron');
+const { badgeBitmap } = require('./attention.cjs');
 const { execFileSync, spawn } = require('node:child_process');
 const { appendFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } = require('node:fs');
 const { createServer } = require('node:net');
 const path = require('node:path');
+const { resolvePaths, repairRuntimeLinks } = require('./paths.cjs');
+
+app.setName?.('Monqey Agent');
 
 let dshProcess;
 let mainWindow;
@@ -16,27 +20,66 @@ let quitConfirmationOpen = false;
 let activeWork;
 let closeNoticeAcknowledged = false;
 let closeNoticePath;
+let pendingAttention = 0;
+let unreadNotifications = 0;
+let mobileAccess;
+let appPaths;
+let pathError;
+const desktopNotifications = new Set();
+
+// Resolve storage before Electron acquires its profile-specific instance lock.
+try {
+  appPaths = resolvePaths({ wrapperDir: __dirname, packaged: app.isPackaged, env: process.env, execPath: process.execPath });
+  const electronData = appPaths.electronData;
+  mkdirSync(electronData, { recursive: true });
+  mkdirSync(appPaths.logs, { recursive: true });
+  app.setPath('userData', electronData);
+  app.setPath('sessionData', electronData);
+  app.setPath('cache', path.join(electronData, 'cache'));
+  app.setAppLogsPath?.(appPaths.logs);
+  closeNoticePath = path.join(electronData, 'background-close-confirmed');
+  closeNoticeAcknowledged = existsSync(closeNoticePath);
+} catch (error) { pathError = error.message; }
 
 function taskbarBadge(count) {
-  const value = Number.isFinite(count) ? Math.max(0, Math.min(99, Math.trunc(count))) : 0;
-  if (value === 0) return null;
-  const label = value > 9 ? '9+' : String(value);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-    <circle cx="8" cy="8" r="7.5" fill="#202124" stroke="#ffffff" stroke-width="1"/>
-    <text x="8" y="11.2" text-anchor="middle" font-family="Arial,sans-serif" font-size="8" font-weight="700" fill="#ffffff">${label}</text>
-  </svg>`;
-  return nativeImage.createFromDataURL(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`).resize({ width: 16, height: 16 });
+  const bitmap = badgeBitmap(count);
+  return bitmap ? nativeImage.createFromBitmap(bitmap.buffer, { width: bitmap.width, height: bitmap.height }) : null;
 }
 
 function setTaskbarBadge(count) {
   if (!mainWindow || mainWindow.isDestroyed() || process.platform !== 'win32') return;
   const icon = taskbarBadge(count);
-  mainWindow.setOverlayIcon(icon, icon ? `${count} Monqey Code notification${count === 1 ? '' : 's'}` : 'No Monqey Code notifications');
+  mainWindow.setOverlayIcon(icon, icon ? `${count} Monqey Agent notification${count === 1 ? '' : 's'}` : 'No Monqey Agent notifications');
 }
 
 ipcMain.on('monqey-code:taskbar-badge', (event, count) => {
   if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return;
-  setTaskbarBadge(count);
+  unreadNotifications = Number.isFinite(count) ? Math.max(0, Math.min(99, Math.trunc(count))) : 0;
+  setTaskbarBadge(Math.max(pendingAttention, unreadNotifications));
+});
+
+ipcMain.on('monqey-code:pending-attention', (event, count) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents || !Number.isFinite(count)) return;
+  const next = Math.max(0, Math.min(99, Math.trunc(count)));
+  if (next > pendingAttention && !mainWindow.isFocused()) mainWindow.flashFrame(true);
+  pendingAttention = next;
+  setTaskbarBadge(Math.max(pendingAttention, unreadNotifications));
+  if (!next) {
+    mainWindow.flashFrame(false);
+    for (const notification of desktopNotifications) if (notification.requiresInput) notification.close();
+  }
+});
+
+ipcMain.on('monqey-code:desktop-notification', (event, message) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents || mainWindow.isFocused()) return;
+  if (!message || typeof message.title !== 'string' || typeof message.body !== 'string' || !Notification.isSupported()) return;
+  const notification = new Notification({ title: message.title.slice(0, 100), body: message.body.slice(0, 300), icon: path.join(__dirname, 'assets', 'monqey.ico') });
+  notification.requiresInput = message.requiresInput === true;
+  desktopNotifications.add(notification);
+  notification.on('click', () => { showMainWindow(); notification.close(); });
+  notification.on('close', () => desktopNotifications.delete(notification));
+  notification.on('failed', () => desktopNotifications.delete(notification));
+  notification.show();
 });
 
 ipcMain.on('monqey-code:active-work', (event, value) => {
@@ -57,6 +100,7 @@ if (!hasSingleInstanceLock) {
     mainWindow.focus();
   });
 }
+if (process.platform === 'win32') app.setAppUserModelId('com.monqey.code');
 
 // Some Windows setups cannot load Electron's GPU subprocess dependencies.
 // The DSH web UI does not need hardware acceleration, so keep startup reliable.
@@ -67,20 +111,10 @@ app.commandLine.appendSwitch('disable-gpu-sandbox');
 app.commandLine.appendSwitch('use-angle', 'swiftshader');
 app.disableHardwareAcceleration();
 
-try {
-  const electronData = path.join(process.env.USERPROFILE || process.env.HOME || '.', '.dsh', 'electron-data');
-  mkdirSync(electronData, { recursive: true });
-  app.setPath('userData', electronData);
-  app.setPath('cache', path.join(electronData, 'cache'));
-  closeNoticePath = path.join(electronData, 'background-close-confirmed');
-  closeNoticeAcknowledged = existsSync(closeNoticePath);
-} catch {}
-
 function writeFailureLog(message) {
   try {
-    const home = process.env.USERPROFILE || process.env.HOME || app.getPath('home');
     const safe = message.replace(/([?&]token=)[^\s]+/gi, '$1<redacted>');
-    appendFileSync(path.join(home, '.dsh', 'monqey-code-startup-error.log'), `${new Date().toISOString()}\n${safe}\n`);
+    if (appPaths) appendFileSync(path.join(appPaths.logs, 'startup-error.log'), `${new Date().toISOString()}\n${safe}\n`);
   } catch {}
 }
 
@@ -116,6 +150,19 @@ function findNodeExecutable() {
   }
 }
 
+function qoderRuntimeEnvironment() {
+  const sdkRoot = app.isPackaged
+    ? path.join(process.resourcesPath, 'qoder-agent-sdk')
+    : path.join(appPaths.profile, 'node_modules', '@qoder-ai', 'qoder-agent-sdk', 'dist');
+  const workerPath = path.join(sdkRoot, '_worker', 'qoder-worker-runtime.obf.mjs');
+  const cliNames = process.platform === 'win32' ? ['qoder.exe', 'qodercli.exe'] : ['qoder', 'qodercli'];
+  const cliPath = cliNames.map((name) => path.join(sdkRoot, '_bundled', name)).find((candidate) => existsSync(candidate));
+  return {
+    ...(existsSync(workerPath) ? { MONQEY_QODER_WORKER_RUNTIME_PATH: workerPath } : {}),
+    ...(cliPath ? { MONQEY_QODER_CLI_PATH: cliPath } : {})
+  };
+}
+
 function findNpxNodeModulePaths(npmCache) {
   const root = path.join(npmCache, '_npx');
   try {
@@ -149,12 +196,12 @@ function quitFromTray() {
   quitConfirmationOpen = true;
   dialog.showMessageBox({
     type: 'warning',
-    title: 'Quit Monqey Code?',
+    title: 'Quit Monqey Agent?',
     message: activeWork === true
-      ? 'Monqey Code reports work in progress or input waiting for you.'
-      : 'Monqey Code could not confirm whether work is still active.',
+      ? 'Monqey Agent reports work in progress or input waiting for you.'
+      : 'Monqey Agent could not confirm whether work is still active.',
     detail: 'Quitting stops DSH and may interrupt that work.',
-    buttons: ['Keep Monqey Code open', 'Quit Monqey Code'],
+    buttons: ['Keep Monqey Agent open', 'Quit Monqey Agent'],
     defaultId: 0,
     cancelId: 0,
     noLink: true
@@ -168,11 +215,11 @@ function quitFromTray() {
 function ensureTray() {
   if (process.platform !== 'win32' || tray) return;
   tray = new Tray(path.join(__dirname, 'assets', 'monqey.ico'));
-  tray.setToolTip('Monqey Code');
+  tray.setToolTip('Monqey Agent');
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Open Monqey Code', click: showMainWindow },
+    { label: 'Open Monqey Agent', click: showMainWindow },
     { type: 'separator' },
-    { label: 'Quit Monqey Code', click: quitFromTray }
+    { label: 'Quit Monqey Agent', click: quitFromTray }
   ]));
   tray.on('click', showMainWindow);
 }
@@ -185,7 +232,7 @@ function showHarness(url) {
       height: 920,
       minWidth: 960,
       minHeight: 640,
-      title: 'Monqey Code',
+      title: 'Monqey Agent',
       icon: path.join(__dirname, 'assets', 'monqey.ico'),
       backgroundColor: '#171717',
       autoHideMenuBar: true,
@@ -197,16 +244,34 @@ function showHarness(url) {
     });
   }
 
-  mainWindow.on('focus', () => setTaskbarBadge(0));
-  mainWindow.webContents.on('did-start-loading', () => { activeWork = undefined; });
+  mainWindow.on('focus', () => {
+    unreadNotifications = 0;
+    setTaskbarBadge(pendingAttention);
+    mainWindow.flashFrame(false);
+    for (const notification of desktopNotifications) notification.close();
+  });
+  mainWindow.webContents.on('did-start-loading', () => {
+    activeWork = undefined;
+    pendingAttention = 0;
+    unreadNotifications = 0;
+    setTaskbarBadge(0);
+    mainWindow.flashFrame(false);
+  });
 
   mainWindow.on('page-title-updated', (event) => {
     event.preventDefault();
-    mainWindow.setTitle('Monqey Code');
+    mainWindow.setTitle('Monqey Agent');
   });
   mainWindow.webContents.on('did-finish-load', () => {
-    mainWindow.webContents.executeJavaScript("document.title = 'Monqey Code';", true).catch(() => {});
+    mainWindow.webContents.executeJavaScript("document.title = 'Monqey Agent';", true).catch(() => {});
   });
+  if (!mobileAccess) {
+    const { installMobileAccess } = require('./mobile-desktop.cjs');
+    mobileAccess = installMobileAccess({
+      app, ipcMain, safeStorage, getWindow: () => mainWindow, origin: url,
+      relay: process.env.MONQEY_MOBILE_RELAY_URL || require('./package.json').mobileAccessRelayUrl
+    });
+  }
   mainWindow.loadURL(url);
   mainWindow.on('close', (event) => {
     if (process.platform !== 'win32' || shuttingDown) return;
@@ -219,8 +284,8 @@ function showHarness(url) {
     closePromptOpen = true;
     dialog.showMessageBox(mainWindow, {
       type: 'info',
-      title: 'Monqey Code stays open',
-      message: 'Closing this window keeps Monqey Code running in the system tray. Your agent task continues in the background. Choose “Quit Monqey Code” from the tray to stop it.',
+      title: 'Monqey Agent stays open',
+      message: 'Closing this window keeps Monqey Agent running in the system tray. Your agent task continues in the background. Choose “Quit Monqey Agent” from the tray to stop it.',
       buttons: ['Hide to tray', 'Keep open'],
       defaultId: 0,
       cancelId: 1,
@@ -247,21 +312,20 @@ function showHarness(url) {
 function fail(message) {
   writeFailureLog(message);
   clearTimeout(startupTimer);
-  dialog.showErrorBox('Monqey Code', message);
+  dialog.showErrorBox('Monqey Agent', message);
   shuttingDown = true;
   app.quit();
 }
 
 async function startDsh() {
+  if (pathError) return fail(pathError);
+  try { repairRuntimeLinks(appPaths); } catch (error) { return fail(`Cannot prepare the runtime in ${appPaths.home}.\n\n${error.message}`); }
   const port = await findFreePort(3080);
-  const userHome = process.env.USERPROFILE || process.env.HOME || app.getPath('home');
-  const dshHome = path.join(userHome, '.dsh');
-  const dshNpmCache = path.join(dshHome, 'npm-cache');
-  const dshLocalAppData = path.join(dshHome, 'local-appdata');
+  const { home: dshHome, npmCache: dshNpmCache, localAppData: dshLocalAppData } = appPaths;
   const launcher = findNodeExecutable();
   const launcherArgs = [
     '--preserve-symlinks',
-    path.join(dshHome, 'profiles', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'),
+    appPaths.launcher,
     'web',
     '--no-open',
     '--port',
@@ -280,7 +344,8 @@ async function startDsh() {
         npm_config_cache: dshNpmCache,
         NODE_PATH: nodePath,
         LOCALAPPDATA: dshLocalAppData,
-        DSH_CLIENT_TITLE: 'Monqey Code'
+        DSH_CLIENT_TITLE: 'Monqey Agent',
+        ...qoderRuntimeEnvironment()
       },
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe']
@@ -323,6 +388,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   shuttingDown = true;
+  mobileAccess?.close();
   clearTimeout(startupTimer);
   if (!dshProcess || dshProcess.killed) return;
   if (process.platform === 'win32') {

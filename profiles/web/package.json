@@ -2,14 +2,18 @@
   "name": "dsh-profile-web",
   "private": true,
   "dependencies": {
+    "@deepseek-ai/dsh-api-remotes": "link:../../packages/monqey-code-api-remotes",
+    "@qoder-ai/qoder-agent-sdk": "^1.0.53",
     "dsh-native-codex-oauth": "github:kfc966/dsh-native-codex-oauth",
     "@deepseek-ai/dsh-launch-environment": "^0.1.5-rc.2",
+    "zod": "^4.5.4",
     "monqey-code-brand": "link:../../packages/monqey-code-brand",
     "@deepseek-ai/dsh-llm": "link:../../packages/monqey-code-llm",
     "@deepseek-ai/dsh-llm-pi-ai": "link:../../packages/monqey-code-llm-pi-ai",
     "@deepseek-ai/dsh-client-ui-settings-models": "link:../../packages/monqey-code-ui-settings-models",
     "monqey-code-mcp": "link:../../packages/monqey-code-mcp",
-    "monqey-code-notifications": "link:../../packages/monqey-code-notifications"
+    "monqey-code-notifications": "link:../../packages/monqey-code-notifications",
+    "monqey-code-delegation": "link:../../packages/monqey-code-delegation"
   },
   "dsh": {
     "profile": {
@@ -19,7 +23,8 @@
         "dsh-native-codex-oauth",
         "monqey-code-brand",
         "monqey-code-mcp",
-        "monqey-code-notifications"
+        "monqey-code-notifications",
+        "monqey-code-delegation"
       ],
       "patchReload": "live"
     }

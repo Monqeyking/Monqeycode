@@ -9,7 +9,7 @@
     const locale = {
       nav: 'MCP',
       title: 'MCP connections',
-      intro: 'Connect Monqey Code to local tools and services that expose the Model Context Protocol.',
+      intro: 'Connect Monqey Agent to local tools and services that expose the Model Context Protocol.',
       add: 'Add MCP server',
       save: 'Save changes',
       saved: 'Saved',
@@ -24,7 +24,7 @@
       url: 'MCP endpoint URL',
       remove: 'Remove',
       empty: 'No MCP servers configured yet.',
-      unavailable: 'MCP settings are unavailable. Restart Monqey Code and try again.',
+      unavailable: 'MCP settings are unavailable. Restart Monqey Agent and try again.',
       advanced: 'Authentication headers and environment variables can be added under the mcp-secrets section in settings.yaml.'
     };
 

@@ -2,7 +2,9 @@
 .credentials.yaml
 .anonymous-user-id
 settings.yaml
+qoder-campaigns.json
 electron-data/
+logs/
 local-appdata/
 npm-cache/
 .pnpm-store/
@@ -16,6 +18,8 @@ electron-builder-cache/
 profiles/node_modules.pre-update-*/
 desktop-wrapper/node_modules/
 desktop-wrapper/dist/
+desktop-wrapper/dist-mobile*/
+desktop-wrapper/dist-qoder*/
 desktop-wrapper/.webpack/
 desktop-wrapper/assets/*preview.png
 

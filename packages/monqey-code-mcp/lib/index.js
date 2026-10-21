@@ -161,7 +161,7 @@ export async function apply(ctx) {
         return;
       }
       sendJson(res, 200, {
-        name: 'Monqey Code',
+        name: 'Monqey Agent',
         available: fileManager !== null,
         fileManager
       });

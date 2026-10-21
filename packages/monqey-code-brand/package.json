@@ -2,7 +2,7 @@
   "name": "monqey-code-brand",
   "version": "1.0.0",
   "private": true,
-  "description": "Local Monqey Code branding for the DSH web profile",
+  "description": "Local Monqey Agent branding for the DSH web profile",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -19,7 +19,8 @@
       "inject": [
         "@deepseek-ai/dsh-client-ui-renderer",
         "@deepseek-ai/dsh-client-ui-sidebar",
-        "@deepseek-ai/dsh-client-ui-conversation"
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings"
       ],
       "platform": "web"
     }

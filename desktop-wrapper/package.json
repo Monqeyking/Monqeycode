@@ -6,6 +6,11 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test:paths": "node --test paths.test.cjs launcher.test.cjs",
+    "test:mobile": "node --test mobile-access.test.cjs mobile-desktop.test.cjs ../packages/monqey-code-brand/mobile-access.test.cjs",
+    "relay:mobile": "node mobile-relay.cjs",
+    "prepare:qoder-runtime": "node prepare-qoder-runtime.cjs",
+    "prebuild": "npm run prepare:qoder-runtime",
     "build": "electron-builder --win portable"
   },
   "devDependencies": {
@@ -14,18 +19,41 @@
   },
   "build": {
     "appId": "com.monqey.code",
-    "productName": "Monqey Code",
+    "productName": "Monqey Agent",
+    "directories": {
+      "output": "dist-mobile-access"
+    },
     "asar": true,
     "icon": "assets/monqey.ico",
     "files": [
       "main.js",
+      "paths.cjs",
+      "attention.cjs",
+      "mobile-access.cjs",
+      "mobile-desktop.cjs",
+      "mobile-protocol.cjs",
+      "mobile-runtime.cjs",
       "preload.js",
       "package.json",
       "assets/monqey.ico"
+    ],
+    "extraResources": [
+      {
+        "from": "../profiles/web/node_modules/@qoder-ai/qoder-agent-sdk/dist/_worker",
+        "to": "qoder-agent-sdk/_worker"
+      },
+      {
+        "from": "../profiles/web/node_modules/@qoder-ai/qoder-agent-sdk/dist/_bundled",
+        "to": "qoder-agent-sdk/_bundled"
+      }
     ],
     "win": {
       "signExecutable": false,
       "target": "portable"
     }
+  },
+  "dependencies": {
+    "qrcode": "1.5.4",
+    "ws": "8.22.0"
   }
 }
