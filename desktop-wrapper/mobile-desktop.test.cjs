@@ -12,11 +12,22 @@ test('Mobile management IPC only accepts the trusted desktop main frame', async 
   const win = { webContents, isDestroyed: () => false };
   const state = { enabled: false, pairing: null, device: null };
   let stopped = false;
+  let fakeAccount;
+  class FakeAccount {
+    constructor(options) { this.options = options; fakeAccount = this; }
+    snapshot() { return { user: this.user || null }; }
+    async signIn() {}
+    cancel() {}
+    complete() { this.user = { email: 'owner@example.test' }; this.options.changed(); }
+    close() {}
+  }
   class FakeManager {
+    constructor() { this.state = state; }
     start() {}
     snapshot() { return { ...state }; }
     enable(value) { calls.push(['enable', value]); }
-    pair() { state.pairing = { uri: 'monqeycode://pair?v=1', expiresAt: Date.now() + 10000 }; }
+    configureRelay(value) { calls.push(['configure', value]); }
+    preparePairing() { calls.push(['prepare']); state.pairing = { uri: 'monqeycode://pair?v=1', expiresAt: Date.now() + 10000 }; }
     cancelPairing() { state.pairing = null; }
     approve(value) { calls.push(['approve', value]); }
     revoke() { calls.push(['revoke']); }
@@ -24,8 +35,8 @@ test('Mobile management IPC only accepts the trusted desktop main frame', async 
   }
   const sandbox = { module: { exports: {} }, Buffer, URL, require(name) {
     if (name === './mobile-access.cjs') return { MobileAccess: FakeManager };
+    if (name === './mobile-account.cjs') return { MobileAccount: FakeAccount };
     if (name === './mobile-runtime.cjs') return { createRuntimeBridge() {} };
-    if (name === 'qrcode') return { toDataURL: async () => 'data:image/png;base64,test' };
     return require(name);
   } };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'mobile-desktop.cjs'), 'utf8'), sandbox);
@@ -37,7 +48,7 @@ test('Mobile management IPC only accepts the trusted desktop main frame', async 
   };
   const installed = sandbox.module.exports.installMobileAccess(options);
   const invoke = handlers.get('monqey-code:mobile-access');
-  for (const action of ['enable', 'pair', 'approve', 'revoke', 'status']) {
+  for (const action of ['configure', 'enable', 'pair', 'approve', 'revoke', 'status']) {
     await assert.rejects(invoke({ sender: {}, senderFrame: frame }, action, true), /desktop-only/);
     await assert.rejects(invoke({ sender: webContents, senderFrame: { url: frame.url } }, action, true), /desktop-only/);
     frame.url = 'https://attacker.example';
@@ -48,8 +59,22 @@ test('Mobile management IPC only accepts the trusted desktop main frame', async 
   const event = { sender: webContents, senderFrame: frame };
   await invoke(event, 'enable', true);
   assert.deepEqual(calls, [['enable', true]]);
+  await invoke(event, 'configure', 'wss://relay.example');
+  assert.deepEqual(calls.at(-1), ['configure', 'wss://relay.example']);
   const paired = await invoke(event, 'pair');
   assert.ok(paired.pairing.qrCode.startsWith('data:image/png'));
+  assert.equal(calls.at(-1)[0], 'prepare');
+  assert.ok(paired.pairing.qrSize >= 165);
+  state.pairing = null;
+  await invoke(event, 'sign-in', 'google');
+  assert.equal(state.pairing, null, 'Opening sign-in must not show a QR before account verification');
+  fakeAccount.complete();
+  assert.ok((await invoke(event, 'status')).pairing, 'Successful sign-in prepares the QR without an enable action');
+  state.pairing = null; fakeAccount.user = null;
+  await invoke(event, 'sign-in', 'github');
+  await invoke(event, 'cancel-sign-in');
+  fakeAccount.complete();
+  assert.equal(state.pairing, null, 'Cancelled sign-in must not leave a pending pairing intent');
   await assert.rejects(invoke(event, 'approve', {}), /Invalid device/);
   await assert.rejects(invoke(event, 'unrecognized'), /Unknown/);
   installed.close();

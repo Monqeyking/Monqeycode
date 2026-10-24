@@ -1,0 +1,7 @@
+{
+  "url": "https://emdhjyqfygwbflzcfsgk.supabase.co",
+  "publishableKey": "sb_publishable_kQgo4Zu5lZ2iiIq9fRJbhA_uSAnZi4c",
+  "relay": "wss://monqey-agent-relay.onrender.com",
+  "desktopCallback": "http://127.0.0.1:48177/auth/callback",
+  "mobileCallback": "monqeycode://auth/callback"
+}

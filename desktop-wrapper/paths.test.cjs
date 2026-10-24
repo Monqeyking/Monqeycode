@@ -65,3 +65,26 @@ test('relocated dependency links are repaired inside this root; external links s
     fs.rmSync(temporary, { recursive: true, force: true });
   }
 });
+
+test('startup creates missing local profile dependencies, including scoped packages', () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'monqey-missing-links-'));
+  try {
+    const home = path.join(temporary, 'Monqey-Agent');
+    const profile = path.join(home, 'profiles', 'web');
+    const worker = path.join(home, 'packages', 'worker');
+    const sidebar = path.join(home, 'packages', 'sidebar');
+    const external = path.join(temporary, 'external');
+    for (const directory of [profile, worker, sidebar, external]) fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(profile, 'package.json'), JSON.stringify({ dependencies: {
+      worker: 'link:../../packages/worker', '@monqey/sidebar': 'link:../../packages/sidebar',
+      outside: 'link:../../../external', absent: 'link:../../packages/absent'
+    } }));
+    assert.equal(repairRuntimeLinks({ home, profile }), 2);
+    const modules = path.join(profile, 'node_modules');
+    assert.equal(fs.realpathSync(path.join(modules, 'worker')), fs.realpathSync(worker));
+    assert.equal(fs.realpathSync(path.join(modules, '@monqey/sidebar')), fs.realpathSync(sidebar));
+    assert.equal(fs.existsSync(path.join(modules, 'outside')), false);
+    assert.equal(fs.existsSync(path.join(modules, 'absent')), false);
+    assert.equal(repairRuntimeLinks({ home, profile }), 0);
+  } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
+});

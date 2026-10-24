@@ -41,7 +41,7 @@ const app = {
 const sandbox = {
   require(name) {
     if (name === 'electron') return { app, Notification: FakeNotification, ipcMain: { on: (n, f) => handlers.set(n, f) }, nativeImage: { createFromBitmap: (buffer, options) => ({ buffer, options }) } };
-    if (name === 'node:fs') return { existsSync: () => false, mkdirSync() {}, appendFileSync() {} };
+    if (name === 'node:fs') return { existsSync: () => false, mkdirSync() {}, appendFileSync() {}, copyFileSync() {} };
     if (name === './mobile-desktop.cjs') return { installMobileAccess: () => ({ close() {} }) };
     return require(name);
   },

@@ -11,9 +11,15 @@ importers:
       '@deepseek-ai/dsh-api-remotes':
         specifier: link:../../packages/monqey-code-api-remotes
         version: link:../../packages/monqey-code-api-remotes
+      '@deepseek-ai/dsh-client-ui-chat':
+        specifier: link:../../packages/monqey-code-ui-chat
+        version: link:../../packages/monqey-code-ui-chat
       '@deepseek-ai/dsh-client-ui-settings-models':
         specifier: link:../../packages/monqey-code-ui-settings-models
         version: link:../../packages/monqey-code-ui-settings-models
+      '@deepseek-ai/dsh-client-ui-sidebar':
+        specifier: link:../../packages/monqey-code-ui-sidebar
+        version: link:../../packages/monqey-code-ui-sidebar
       '@deepseek-ai/dsh-launch-environment':
         specifier: ^0.1.5-rc.2
         version: 0.1.5-rc.2
@@ -26,21 +32,33 @@ importers:
       '@qoder-ai/qoder-agent-sdk':
         specifier: ^1.0.53
         version: 1.0.53(zod@4.5.4)
+      '@wxg-prc-cpg/browser-skill-dsh-plugin':
+        specifier: 0.3.3
+        version: 0.3.3(@deepseek-ai/dsh-llm@..+packages+monqey-code-llm)
       dsh-native-codex-oauth:
         specifier: github:kfc966/dsh-native-codex-oauth
         version: https://codeload.github.com/kfc966/dsh-native-codex-oauth/tar.gz/28273cc4615f2e4cb5a11cf0c57968b68101f737
       monqey-code-brand:
         specifier: link:../../packages/monqey-code-brand
         version: link:../../packages/monqey-code-brand
+      monqey-code-cowork:
+        specifier: link:../../packages/monqey-code-cowork
+        version: link:../../packages/monqey-code-cowork
       monqey-code-delegation:
         specifier: link:../../packages/monqey-code-delegation
         version: link:../../packages/monqey-code-delegation
       monqey-code-mcp:
         specifier: link:../../packages/monqey-code-mcp
         version: link:../../packages/monqey-code-mcp
+      monqey-code-memory:
+        specifier: link:../../packages/monqey-code-memory
+        version: link:../../packages/monqey-code-memory
       monqey-code-notifications:
         specifier: link:../../packages/monqey-code-notifications
         version: link:../../packages/monqey-code-notifications
+      monqey-code-workspace-tools:
+        specifier: link:../../packages/monqey-code-workspace-tools
+        version: link:../../packages/monqey-code-workspace-tools
       zod:
         specifier: ^4.5.4
         version: 4.5.4
@@ -73,6 +91,27 @@ packages:
     engines: {node: '>=18.0.0'}
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
+
+  '@wxg-prc-cpg/browser-skill-dsh-plugin@0.3.3':
+    resolution: {integrity: sha512-YleWGGDN7re7arDD8PVgcIuTeMXHne4JKilLaKmvO9L1EzvOKNKVXZ3eHq7CXbgF7uooxRjnYviMH2QMRqZv+A==}
+    peerDependencies:
+      '@deepseek-ai/cordis': ^4.0.2
+      '@deepseek-ai/dsh-attachment': ^0.1.5-rc.3 || ^0.2.0-rc.1
+      '@deepseek-ai/dsh-client-ui-primitives': ^0.1.5-rc.3 || ^0.2.0-rc.1
+      '@deepseek-ai/dsh-client-ui-tool': ^0.1.5-rc.3 || ^0.2.0-rc.1
+      '@deepseek-ai/dsh-llm': ^0.1.5-rc.3 || ^0.2.0-rc.1
+      '@deepseek-ai/dsh-tools': ^0.1.5-rc.3 || ^0.2.0-rc.1
+      '@deepseek-ai/schemastery': ^3.18.2
+      react: ^18.2.0
+    peerDependenciesMeta:
+      '@deepseek-ai/dsh-attachment':
+        optional: true
+      '@deepseek-ai/dsh-client-ui-primitives':
+        optional: true
+      '@deepseek-ai/dsh-client-ui-tool':
+        optional: true
+      react:
+        optional: true
 
   accepts@2.0.0:
     resolution: {integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==}
@@ -465,6 +504,10 @@ snapshots:
     transitivePeerDependencies:
       - '@cfworker/json-schema'
       - supports-color
+
+  '@wxg-prc-cpg/browser-skill-dsh-plugin@0.3.3(@deepseek-ai/dsh-llm@..+packages+monqey-code-llm)':
+    dependencies:
+      '@deepseek-ai/dsh-llm': link:../../packages/monqey-code-llm
 
   accepts@2.0.0:
     dependencies:

@@ -1,0 +1,63 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { CoworkStore } from './lib/store.js';
+const user = { kind: 'user', id: 'local-user', label: 'You' };
+const agent = { kind: 'agent', id: randomUUID(), label: 'Agent' };
+function fixture(t) { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'monqey-cowork-')); t.after(() => fs.rmSync(root, { recursive: true, force: true })); return { store: new CoworkStore(root), root, workspace: randomUUID() }; }
+test('durable shared task, identity, comments, retries and stale revisions', t => {
+  const { store, root, workspace } = fixture(t);
+  const first = store.create(workspace, { title: 'Prepare invoice', linkedSessionId: agent.id }, agent, 'test-call');
+  assert.equal(store.create(workspace, { title: 'Prepare invoice' }, agent, 'test-call').task.id, first.task.id);
+  assert.equal(store.read(workspace).revision, 1);
+  const reopened = new CoworkStore(root);
+  const updated = reopened.update(workspace, first.task.id, 1, { assignee: 'Sam', status: 'in_progress' }, user);
+  assert.equal(updated.task.updatedBy.kind, 'user');
+  assert.throws(() => store.update(workspace, first.task.id, 1, { status: 'done' }, agent), /changed since/);
+  const comment = store.comment(workspace, first.task.id, 2, 'Waiting for receipt.', agent);
+  assert.equal(comment.task.comments[0].actor.id, agent.id);
+  assert.equal(comment.task.revision, 3);
+  assert.equal(reopened.read(workspace).tasks[0].assignee, 'Sam');
+  assert.equal(reopened.read(workspace).activity.length, 3);
+});
+test('dependency integrity, completion, archive and workspace boundaries', t => {
+  const { store, workspace } = fixture(t);
+  const a = store.create(workspace, { title: 'First' }, user).task;
+  const b = store.create(workspace, { title: 'Second' }, user).task;
+  const foreignWorkspace = randomUUID();
+  const foreign = store.create(foreignWorkspace, { title: 'Foreign' }, user).task;
+  assert.throws(() => store.update(workspace, a.id, 1, { dependencies: [foreign.id] }, user), /another workspace/);
+  store.update(workspace, b.id, 1, { dependencies: [a.id] }, user);
+  assert.throws(() => store.update(workspace, a.id, 1, { dependencies: [b.id] }, user), /cycle/);
+  assert.throws(() => store.update(workspace, b.id, 2, { status: 'done' }, user), /dependencies/);
+  assert.throws(() => store.update(workspace, a.id, 1, { archived: true }, user), /depends/);
+  store.update(workspace, a.id, 1, { status: 'done' }, user);
+  store.update(workspace, b.id, 2, { status: 'done' }, user);
+  assert.throws(() => store.update(workspace, a.id, 2, { status: 'todo' }, user), /Reopen completed/);
+  assert.throws(() => store.comment(foreignWorkspace, a.id, 2, 'Wrong board', agent), /not found/);
+  const archived = store.update(workspace, a.id, 2, { archived: true }, user).task;
+  assert.equal(archived.archived, true);
+  assert.equal(store.update(workspace, a.id, 3, { archived: false }, user).task.archived, false);
+});
+test('invalid and corrupt records are retained without silent reset', t => {
+  const { store, workspace } = fixture(t);
+  const task = store.create(workspace, { title: 'Retain me' }, user).task;
+  const before = fs.readFileSync(store.file(workspace));
+  assert.throws(() => store.update(workspace, task.id, 1, { unexpected: 'data' }, user), /Invalid task/);
+  assert.throws(() => store.create(workspace, { title: 'x'.repeat(161) }, user), /Title/);
+  assert.throws(() => store.file('../../outside'), /identifier/);
+  assert.deepEqual(fs.readFileSync(store.file(workspace)), before);
+  fs.writeFileSync(store.file(workspace), '{broken');
+  assert.throws(() => store.create(workspace, { title: 'New task' }, user), /retained/);
+  assert.equal(fs.readFileSync(store.file(workspace), 'utf8'), '{broken');
+});
+test('comment limits fail without altering an existing task', t => {
+  const { store, workspace } = fixture(t);
+  const task = store.create(workspace, { title: 'Limits' }, user).task;
+  for (let revision = 1; revision <= 100; revision++) store.comment(workspace, task.id, revision, 'Update', user);
+  assert.throws(() => store.comment(workspace, task.id, 101, 'Extra', user), /100-comment/);
+  assert.equal(store.read(workspace).tasks[0].revision, 101);
+});

@@ -141,7 +141,7 @@ window.__ModuleLoader__.load({
               fontSize: 13,
               lineHeight: "20px"
             },
-            children: "Resterend gebruik"
+            children: "Remaining usage"
           }),
           open && jsx("div", {
             role: "dialog",
@@ -484,65 +484,12 @@ window.__ModuleLoader__.load({
       });
     }
 
-    async function executeModeCommand(commands, sessionId, line) {
-      const result = await commands.execute(sessionId, line, []);
-      if (!result?.ok) throw new Error(`${line} failed: ${result?.error?.message ?? "remote error"}`);
-      if (result.value === void 0) throw new Error(`unknown or malformed command: ${line}`);
-      if (result.value.result.kind !== "success") throw new Error(result.value.result.text || `${line} failed`);
-    }
-
-    function ModeControl({ useProjection, sessionId, commands }) {
-      const plan = useProjection("plan");
-      const permissions = useProjection("permissions");
-      const [busy, setBusy] = react.useState(false);
-      const [error, setError] = react.useState(null);
-      if (plan === void 0 || permissions === void 0) return null;
-      const planActive = plan.pending ? !plan.active : plan.active;
-      const current = planActive ? "plan" : "act";
-      const switchMode = async (event) => {
-        const next = event.target.value;
-        const alreadySelected = next === "plan"
-          ? planActive && permissions.currentValue === "read-only"
-          : !planActive && permissions.currentValue === "workspace-write";
-        if (alreadySelected || busy) return;
-        setBusy(true);
-        setError(null);
-        try {
-          const permission = next === "plan" ? "read-only" : "workspace-write";
-          await executeModeCommand(commands, sessionId, `/permission ${permission}`);
-          await executeModeCommand(commands, sessionId, next === "plan" ? "/plan" : "/plan off");
-        } catch (reason) {
-          setError(reason instanceof Error ? reason.message : String(reason));
-        } finally {
-          setBusy(false);
-        }
-      };
-      return jsx("label", {
-        title: "Plan is read-only; Act allows workspace edits.",
-        style: { display: "inline-flex", alignItems: "center", gap: 6, color: "var(--dsw-alias-label-secondary)", fontSize: 12 },
-        children: [
-          jsx("span", { children: "Mode" }),
-          jsx("select", {
-            value: current,
-            disabled: busy,
-            "aria-label": "Agent mode",
-            onChange: switchMode,
-            style: { height: 30, padding: "0 8px", border: 0, borderRadius: 15, background: "var(--dsw-alias-bg-module-platform)", color: "var(--dsw-alias-label-primary)", font: "inherit", cursor: busy ? "default" : "pointer" },
-            children: [
-              jsx("option", { value: "plan", children: "Plan" }),
-              jsx("option", { value: "act", children: "Act" })
-            ]
-          }),
-          error && jsx("span", { role: "status", title: error, style: { color: "var(--dsw-alias-state-error-primary)", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: error })
-        ]
-      });
-    }
-
     function MobileAccessSection() {
       const bridge = window.monqeyDesktop?.mobileAccess;
       const [state, setState] = react.useState(null);
       const [error, setError] = react.useState(null);
       const [busy, setBusy] = react.useState(false);
+      const [relayDraft, setRelayDraft] = react.useState(null);
       const lifetime = react.useRef({ mounted: false, busy: false, revision: 0 });
       react.useEffect(() => {
         const current = lifetime.current;
@@ -572,7 +519,7 @@ window.__ModuleLoader__.load({
         setError(null);
         try {
           const value = await bridge[action](...args);
-          if (current.mounted) setState(value);
+          if (current.mounted) { setState(value); if (action === 'setConnectionService') setRelayDraft(null); }
         } catch (cause) {
           if (current.mounted) setError(cause?.message?.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "") || "Mobile access could not be updated.");
         } finally {
@@ -585,7 +532,7 @@ window.__ModuleLoader__.load({
       const buttonStyle = { color: "var(--dsw-alias-label-primary)", background: "var(--dsw-alias-bg-layer-2)", border: "1px solid var(--dsw-alias-border-l3)", borderRadius: 8, padding: "8px 12px", font: "inherit", fontSize: 13 };
       const button = (label, action, disabled = false) => jsx("button", { type: "button", disabled: disabled || busy, onClick: action, style: { ...buttonStyle, opacity: disabled || busy ? 0.5 : 1, cursor: disabled || busy ? "default" : "pointer" }, children: label });
       const row = (label, value) => jsx("div", { key: label, style: { display: "flex", justifyContent: "space-between", gap: 16, margin: "10px 0", fontSize: 13 }, children: [jsx("span", { style: muted, children: label }), jsx("span", { style: { overflowWrap: "anywhere", textAlign: "right" }, children: value })] });
-      const serviceLabel = { disabled: "Disabled", connecting: "Connecting…", connected: "Ready", disconnected: "Reconnecting…", unavailable: "Unavailable" };
+      const serviceLabel = { disabled: "Disabled", connecting: "Connecting…", connected: "Ready", disconnected: "Reconnecting…", unavailable: "Unavailable", 'sign-in-required': 'Sign in required' };
       return jsx("section", {
         "aria-label": "Mobile Access", style: { padding: 24, maxWidth: 680, width: "100%", boxSizing: "border-box" },
         children: [
@@ -595,16 +542,16 @@ window.__ModuleLoader__.load({
           bridge && !state && !error && jsx("p", { style: muted, children: "Loading mobile access…" }),
           error && jsx("p", { role: "alert", style: muted, children: error }),
           state && jsx("div", { children: [
-            jsx("div", { style: card, children: [
-              jsx("label", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, fontSize: 14, fontWeight: 600 }, children: [
-                "Enable Mobile Access",
-                jsx("input", { type: "checkbox", role: "switch", "aria-label": "Enable Mobile Access", checked: state.enabled, disabled: busy || (!state.serviceConfigured && !state.enabled), onChange: event => void run("setEnabled", event.target.checked) })
+            state.account && jsx('div', { style: card, children: [
+              jsx('h3', { style: { margin: '0 0 12px', fontSize: 15 }, children: 'Monqey account' }),
+              state.account.user ? jsx('div', { children: [row('Signed in as', state.account.user.email), button('Sign out', () => void run('signOut'))] }) : jsx('div', { children: [
+                jsx('p', { style: muted, children: 'Sign in to show your pairing code. Use the same account on your phone, then approve it here.' }),
+                jsx('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' }, children: state.account.signingIn ? [button('Cancel sign-in', () => void run('cancelSignIn'))] : [button('Continue with Google', () => void run('signIn', 'google')), button('Continue with GitHub', () => void run('signIn', 'github'))] }),
+                state.account.signingIn && jsx('p', { role: 'status', style: muted, children: 'Finish signing in in your browser, then return here.' })
               ] }),
-              row("Connection service", state.serviceConfigured ? serviceLabel[state.serviceStatus] || "Unavailable" : "Not configured"),
-              !state.serviceConfigured && jsx("p", { role: "status", style: muted, children: "The mobile connection service has not been set up yet. Phone access is not available in this build." }),
-              state.error && jsx("p", { role: "alert", style: muted, children: state.error })
+              state.account.error && jsx('p', { role: 'alert', style: muted, children: state.account.error })
             ] }),
-            jsx("div", { style: card, children: [
+            (!state.pairing || state.device) && jsx("div", { style: card, children: [
               jsx("h3", { style: { margin: "0 0 12px", fontSize: 15 }, children: "Paired Device" }),
               state.device ? jsx("div", { children: [
                 row("Device name", state.device.name), row("Platform", state.device.platform), row("Status", state.device.status),
@@ -613,14 +560,15 @@ window.__ModuleLoader__.load({
                 jsx("p", { style: muted, children: "Only this paired phone can control your agents. Revoking access immediately disconnects it." }),
                 button("Revoke Access", () => void run("revokeAccess"))
               ] }) : jsx("div", { children: [
-                jsx("p", { style: muted, children: "No phone paired. You can pair one phone at a time." }),
-                button("Pair Phone", () => void run("pairPhone"), !state.enabled || state.serviceStatus !== "connected" || Boolean(state.pairing))
+                jsx("p", { style: muted, children: state.preparingPairing ? "Preparing your pairing code… The connection service may take a moment to wake up." : "No phone paired. Show a code and scan it with your phone." }),
+                !state.pairing && !state.preparingPairing && button("Show pairing code", () => void run("pairPhone"), !state.serviceConfigured || Boolean(state.account && !state.account.user)),
+                state.preparingPairing && button('Cancel', () => void run('cancelPairing'))
               ] })
             ] }),
             state.pairing && jsx("div", { style: card, children: [
               jsx("h3", { style: { margin: "0 0 12px", fontSize: 15 }, children: "Pair Phone" }),
-              jsx("p", { style: muted, children: "Scan this code in the Monqey Agent mobile app, then approve your phone below. Keep this code private." }),
-              state.pairing.qrCode && jsx("img", { src: state.pairing.qrCode, width: 256, height: 256, alt: "Phone pairing QR code", style: { maxWidth: "100%", height: "auto", borderRadius: 8 } }),
+              jsx("p", { style: muted, children: "Scan with your phone camera or the Monqey Agent scanner, then approve your phone below. Keep this code private." }),
+              state.pairing.qrCode && jsx("img", { src: state.pairing.qrCode, width: state.pairing.qrSize || 360, height: state.pairing.qrSize || 360, alt: "Phone pairing QR code", style: { maxWidth: "100%", height: "auto", imageRendering: "pixelated" } }),
               jsx("p", { style: muted, children: `Expires at ${new Date(state.pairing.expiresAt).toLocaleTimeString("en-GB")}` }),
               state.pendingDevice && jsx("div", { role: "status", children: [
                 jsx("strong", { children: "Allow this phone to control your agents?" }),
@@ -633,10 +581,87 @@ window.__ModuleLoader__.load({
                 ] })
               ] }),
               button("Cancel Pairing", () => void run("cancelPairing"))
+            ] }),
+            jsx("div", { style: card, children: [
+              state.device && jsx("label", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, fontSize: 14, fontWeight: 600 }, children: [
+                "Enable Mobile Access",
+                jsx("input", { type: "checkbox", role: "switch", "aria-label": "Enable Mobile Access", checked: state.enabled, disabled: busy || (!state.serviceConfigured && !state.enabled), onChange: event => void run("setEnabled", event.target.checked) })
+              ] }),
+              row("Connection service", state.serviceConfigured ? serviceLabel[state.serviceStatus] || "Unavailable" : "Not configured"),
+              typeof bridge.setConnectionService === 'function' && jsx("details", { style: { marginTop: 16 }, children: [
+                jsx('summary', { style: { ...muted, cursor: 'pointer' }, children: 'Advanced connection settings' }),
+                jsx("label", { htmlFor: 'monqey-mobile-relay', style: muted, children: 'Connection service address' }),
+                jsx("input", { id: 'monqey-mobile-relay', type: 'url', placeholder: 'wss://your-connection-service.example', value: relayDraft ?? state.relayUrl ?? '', disabled: busy || Boolean(state.device), onChange: event => setRelayDraft(event.target.value), style: { ...buttonStyle, boxSizing: 'border-box', width: '100%', margin: '8px 0', textAlign: 'left' } }),
+                button('Save connection service', () => void run('setConnectionService', (relayDraft ?? state.relayUrl ?? '').trim()), Boolean(state.device) || (relayDraft ?? state.relayUrl ?? '').trim() === (state.relayUrl ?? '')),
+                jsx('p', { style: muted, children: state.device ? 'Revoke the paired phone before changing the service.' : 'The default service is ready to use. Changing the address turns Mobile Access off.' }),
+                !state.device && state.enabled && button('Disable Mobile Access', () => void run('setEnabled', false))
+              ] }),
+              !state.serviceConfigured && jsx("p", { role: "status", style: muted, children: "Set up a connection service before enabling Mobile Access. The pairing QR code appears after the service connects." }),
+              state.error && jsx("p", { role: "alert", style: muted, children: state.error })
             ] })
           ] })
         ]
       });
+    }
+
+    function openSettings(section) {
+      // shortcut: the settings shell exposes no navigation service; use its accessible controls.
+      document.querySelector('button[aria-label="Settings"]')?.click();
+      if (!section) return;
+      let attempts = 0;
+      const select = () => {
+        const dialog = document.querySelector('[role="dialog"]');
+        const button = [...(dialog?.querySelectorAll('button') || [])].find(item => item.textContent.trim() === section);
+        if (button) button.click();
+        else if (++attempts < 20) window.setTimeout(select, 50);
+      };
+      select();
+    }
+
+    function EnvironmentPanel({ sessionId, useSessions }) {
+      const session = useSessions(state => state.byId[sessionId]);
+      const [computer, setComputer] = react.useState('This computer');
+      const [mobile, setMobile] = react.useState(null);
+      const [error, setError] = react.useState('');
+      const [busy, setBusy] = react.useState(false);
+      const [copied, setCopied] = react.useState(false);
+      const cwd = session?.cwd;
+      const bridge = window.monqeyDesktop;
+      react.useEffect(() => {
+        if (busy) return;
+        let disposed = false;
+        bridge?.chrome?.getInfo().then(info => { if (!disposed) setComputer(info.computer); }).catch(() => {});
+        const refresh = async () => {
+          try { const value = await bridge?.mobileAccess?.getStatus(); if (!disposed) { setMobile(value || null); setError(''); } }
+          catch { if (!disposed) setError('Mobile Access status unavailable.'); }
+        };
+        void refresh();
+        const timer = window.setInterval(refresh, 3000);
+        return () => { disposed = true; window.clearInterval(timer); };
+      }, [bridge, busy]);
+      react.useEffect(() => { setCopied(false); }, [cwd]);
+      const muted = { color: 'var(--dsw-alias-label-secondary)', fontSize: 12, lineHeight: 1.6 };
+      const row = { display: 'flex', gap: 12, alignItems: 'center', padding: '12px 0' };
+      const button = { font: 'inherit', fontSize: 12, color: 'inherit', border: '1px solid var(--dsw-alias-border-l3)', background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 8, padding: '7px 10px', cursor: 'pointer' };
+      return jsx('section', { 'aria-label': 'Environment', style: { padding: 20, color: 'var(--dsw-alias-label-primary)', height: '100%', overflow: 'auto', boxSizing: 'border-box' }, children: [
+        jsx('h2', { style: { fontSize: 16, margin: '0 0 16px' }, children: 'Environment' }),
+        jsx('div', { style: { border: '1px solid var(--dsw-alias-border-l3)', borderRadius: 12, padding: '4px 16px' }, children: [
+          jsx('div', { style: row, children: [jsx('span', { 'aria-hidden': true, children: '▱' }), jsx('div', { children: [jsx('div', { children: 'This computer' }), computer !== 'This computer' && jsx('div', { style: muted, children: computer })] })] }),
+          jsx('div', { style: { ...row, borderTop: '1px solid var(--dsw-alias-border-l3)' }, children: [jsx('span', { 'aria-hidden': true, children: '▤' }), jsx('div', { style: { minWidth: 0, flex: 1 }, children: [jsx('div', { children: cwd ? cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || cwd : 'No project selected' }), cwd && jsx('div', { style: { ...muted, overflowWrap: 'anywhere' }, children: cwd })] })] }),
+          cwd && jsx('button', { type: 'button', style: { ...button, marginBottom: 14 }, onClick: async () => { try { await navigator.clipboard.writeText(cwd); setCopied(true); } catch { setError('The project path could not be copied.'); } }, children: copied ? 'Copied' : 'Copy project path' }),
+          jsx('div', { style: { ...row, borderTop: '1px solid var(--dsw-alias-border-l3)' }, children: [jsx('span', { 'aria-hidden': true, children: '↗' }), jsx('div', { style: { flex: 1 }, children: [jsx('div', { children: 'Remote Control' }), jsx('div', { style: muted, children: !bridge?.mobileAccess ? 'Desktop app required' : !mobile ? 'Loading…' : !mobile.serviceConfigured ? 'Not configured' : !mobile.enabled ? 'Disabled' : mobile.device?.status || 'No phone paired' })] }), jsx('button', { type: 'button', role: 'switch', 'aria-label': 'Remote Control', 'aria-checked': Boolean(mobile?.enabled), disabled: busy || !mobile || (!mobile.serviceConfigured && !mobile.enabled), style: { width: 34, height: 20, border: 0, borderRadius: 20, padding: 3, flexShrink: 0, background: mobile?.enabled ? '#b8873e' : 'var(--dsw-alias-bg-layer-2)', opacity: !mobile?.serviceConfigured || busy ? 0.5 : 1, cursor: mobile?.serviceConfigured && !busy ? 'pointer' : 'default' }, onClick: async () => {
+            const enabled = !mobile.enabled; setBusy(true); setError('');
+            try { setMobile(await bridge.mobileAccess.setEnabled(enabled)); } catch { setError('Remote Control could not be updated.'); } finally { setBusy(false); }
+          }, children: jsx('span', { style: { display: 'block', width: 14, height: 14, borderRadius: '50%', background: 'var(--dsw-alias-label-primary)', transform: mobile?.enabled ? 'translateX(14px)' : 'none', transition: 'transform 120ms' } }) })] })
+        ] }),
+        jsx('button', { type: 'button', style: { ...button, marginTop: 14 }, onClick: () => openSettings('Mobile Access'), children: 'Mobile Access settings' }),
+        error && jsx('p', { role: 'alert', style: muted, children: error }),
+        jsx('p', { style: { ...muted, marginTop: 20 }, children: 'Drag the Environment tab to move it. Drag the panel edge to resize it.' })
+      ] });
+    }
+
+    function EnvironmentButton({ open }) {
+      return jsx('button', { type: 'button', onClick: open, title: 'Open Environment', 'aria-label': 'Open Environment', style: { color: 'var(--dsw-alias-label-secondary)', background: 'transparent', border: '1px solid var(--dsw-alias-border-l3)', borderRadius: 7, padding: '5px 9px', font: 'inherit', fontSize: 12, cursor: 'pointer' }, children: 'Environment' });
     }
 
     function ModelCatalogStatus({ remote }) {
@@ -663,10 +688,25 @@ window.__ModuleLoader__.load({
     const inject = ["slots", "remote", "remote.session", "modelDirectories"];
 
     function apply(ctx) {
+      ctx.inject(['sidebarRightTabs', 'sidebarRight', 'uiWorkspace'], scope => {
+        const id = 'monqey-code-brand:environment';
+        scope.effect(() => scope.sidebarRightTabs.register({ id, kind: 'monqey-environment', title: () => 'Environment', guide: [{ order: 0, title: () => 'Environment', description: () => 'This computer, project and Mobile Access' }] }));
+        scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({ name: 'sidebar.right.pane.tab', key: id, inject: sessionId => ({ sessionId }) }, EnvironmentPanel));
+        scope.slots.inject('conversation.session.header.utilities', () => scope.slots.register({ name: 'conversation.session.header.utilities', id, order: 50, inject: sessionId => ({ open: () => scope.sidebarRight.openTabIn(sessionId, 'monqey-environment') }) }, EnvironmentButton));
+        if (typeof window !== 'undefined' && window.monqeyDesktop?.chrome) scope.effect(() => window.monqeyDesktop.chrome.onAction(action => {
+          if (action === 'new-agent') scope.uiWorkspace.startSession();
+          if (action === 'settings') openSettings();
+        }));
+      });
+      ctx.inject(['theme'], scope => scope.effect(() => scope.theme.overrideTokens('monqey-code-brand:thinking', {
+        '--monqey-thinking-base': { light: '#8b5517', dark: '#e9b967' },
+        '--monqey-thinking-highlight': { light: '#9a641e', dark: '#ffe3a8' }
+      })));
       ctx.slots.inject("settings.section", () => ctx.slots.register({
         name: "settings.section", id: "mobile-access", order: 35, label: () => "Mobile Access"
       }, MobileAccessSection));
       if (typeof document !== "undefined") {
+
         const setTitle = () => {
           if (document.title !== "Monqey Agent") document.title = "Monqey Agent";
         };
@@ -701,11 +741,6 @@ window.__ModuleLoader__.load({
           id: "monqey-code-qoder-usage",
           inject: (sessionId) => ({ directory: models.directoryFor(sessionId).store, remote: scope.remote })
         }, QoderUsageLink));
-        scope.slots.inject("conversation.input.left", () => scope.slots.register({
-          name: "conversation.input.left",
-          id: "monqey-code-mode",
-          inject: (sessionId) => ({ sessionId, commands: scope.remote.commands })
-        }, ModeControl));
       });
     }
 

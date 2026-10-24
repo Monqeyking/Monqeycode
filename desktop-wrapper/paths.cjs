@@ -71,9 +71,10 @@ function repairRuntimeLinks(paths) {
     const link = path.join(paths.profile, 'node_modules', name);
     if (existsSync(link) || !existsSync(replacement)) continue;
     let stat;
-    try { stat = fs.lstatSync(link); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-    if (!stat.isSymbolicLink()) continue;
-    fs.unlinkSync(link);
+    try { stat = fs.lstatSync(link); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (stat && !stat.isSymbolicLink()) continue;
+    if (stat) fs.unlinkSync(link);
+    fs.mkdirSync(path.dirname(link), { recursive: true });
     fs.symlinkSync(replacement, link, process.platform === 'win32' ? 'junction' : 'dir');
     repaired++;
   }

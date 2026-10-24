@@ -10,10 +10,11 @@ const code = () => crypto.randomBytes(32).toString('base64url');
 const sameSecret = (a, b) => typeof a === 'string' && typeof b === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
 class MobileAccess extends EventEmitter {
-  constructor({ filePath, protect, unprotect, WebSocket, relay, now = Date.now, openRuntime }) {
+  constructor({ filePath, protect, unprotect, WebSocket, relay, now = Date.now, openRuntime, getAccountToken }) {
     super();
-    Object.assign(this, { filePath, protect, unprotect, WebSocket, now, openRuntime });
-    this.relay = relay ? protocol.relayUrl(relay) : null;
+    Object.assign(this, { filePath, protect, unprotect, WebSocket, now, openRuntime, getAccountToken });
+    this.accountRequests = new Map();
+    this.connectionGeneration = 0;
     this.state = { version: 1, enabled: false, identity: null, device: null };
     if (fs.existsSync(filePath)) {
       this.state = JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -24,7 +25,11 @@ class MobileAccess extends EventEmitter {
         if (!protocol.verify(this.state.identity.publicKey, 'key-check', protocol.sign(privateKey, 'key-check'))) throw new Error('Mobile access identity is invalid.');
       }
       if (this.state.device && protocol.publicIdentity(this.state.device.publicKey).id !== this.state.device.id) throw new Error('Paired device is invalid.');
+      if (this.state.relayUrl !== undefined && typeof this.state.relayUrl !== 'string') throw new Error('Invalid connection service setting.');
     }
+    this.relay = this.state.relayUrl !== undefined
+      ? (this.state.relayUrl ? protocol.relayUrl(this.state.relayUrl) : null)
+      : (relay ? protocol.relayUrl(relay) : null);
     this.peers = new Map();
     this.connection = 'disabled';
     this.retryCount = 0;
@@ -55,15 +60,30 @@ class MobileAccess extends EventEmitter {
     return {
       enabled: this.state.enabled,
       serviceConfigured: Boolean(this.relay),
+      relayUrl: this.relay || '',
       serviceStatus: this.connection,
       error: this.error || null,
       device: device ? { id: device.id, name: device.name, platform: device.platform, pairedAt: device.pairedAt, lastSeenAt: active?.lastSeenAt ?? device.lastSeenAt, status: active ? 'Connected' : 'Offline', fingerprint: device.id } : null,
       pairing: current ? { uri: current.uri, expiresAt: current.expiresAt } : null,
+      preparingPairing: Boolean(this.prepareRequested),
       pendingDevice: current?.pending ? { id: current.pending.device.id, name: current.pending.device.name, platform: current.pending.device.platform, fingerprint: current.pending.device.id } : null
     };
   }
 
   changed() { this.emit('change', this.snapshot()); }
+
+  configureRelay(value) {
+    if (typeof value !== 'string' || value.length > 2048) throw new Error('Enter a valid secure connection service URL.');
+    const relay = value.trim() ? protocol.relayUrl(value.trim()) : null;
+    if (relay === this.relay) return this.snapshot();
+    if (this.state.device) throw new Error('Revoke the paired phone before changing the connection service.');
+    this.save({ ...this.state, relayUrl: relay || '', enabled: false });
+    this.disconnect();
+    this.relay = relay;
+    this.error = null;
+    this.changed();
+    return this.snapshot();
+  }
 
   enable(enabled) {
     if (typeof enabled !== 'boolean') throw new Error('Invalid mobile access setting.');
@@ -80,6 +100,17 @@ class MobileAccess extends EventEmitter {
     return this.snapshot();
   }
 
+  preparePairing() {
+    if (this.state.device) throw new Error('Revoke the current phone before pairing another phone.');
+    if (!this.relay) throw new Error('The mobile connection service has not been set up yet.');
+    if (this.connection === 'connected') return this.pair();
+    this.prepareRequested = true;
+    if (!this.state.enabled) this.enable(true);
+    else void this.connect();
+    this.changed();
+    return this.snapshot();
+  }
+
   pair() {
     if (!this.state.enabled || this.connection !== 'connected') throw new Error('Connect mobile access before pairing a phone.');
     if (this.state.device) throw new Error('Revoke the current phone before pairing another phone.');
@@ -90,12 +121,19 @@ class MobileAccess extends EventEmitter {
     invite.searchParams.set('relay', this.relay);
     invite.searchParams.set('key', this.state.identity.publicKey);
     invite.searchParams.set('code', secret);
+    if (this.relay === require('./mobile-account-config.json').relay) {
+      // Fragments stay on the phone; the invitation never reaches HTTP logs.
+      const fragment = new URLSearchParams(invite.searchParams);
+      fragment.delete('relay');
+      invite.href = this.relay.replace('wss:', 'https:') + '/pair#' + fragment;
+    }
     this.pairing = { secret, uri: invite.href, expiresAt: this.now() + PAIRING_MS };
     this.changed();
     return this.snapshot();
   }
 
   cancelPairing() {
+    this.prepareRequested = false;
     const pending = this.pairing?.pending;
     this.pairing = null;
     if (pending) this.drop(pending.id);
@@ -107,19 +145,35 @@ class MobileAccess extends EventEmitter {
     const pairing = this.pairing;
     const peer = pairing?.pending;
     if (!this.state.enabled || this.state.device || !peer || peer.device.id !== id || this.peers.get(peer.id) !== peer || pairing.expiresAt <= this.now()) throw new Error('This pairing request has expired.');
-    this.save({ ...this.state, device: { ...peer.device, pairedAt: this.now(), lastSeenAt: this.now() } });
-    this.pairing = null;
-    this.authenticate(peer);
-    this.changed();
-    return this.snapshot();
+    const finish = () => {
+      if (this.pairing !== pairing || this.peers.get(peer.id) !== peer || pairing.expiresAt <= this.now()) throw Error('This pairing request has expired.');
+      this.save({ ...this.state, device: { ...peer.device, pairedAt: this.now(), lastSeenAt: this.now() } });
+      this.pairing = null;
+      this.authenticate(peer);
+      this.changed();
+      return this.snapshot();
+    };
+    return this.accountMode ? this.accountRequest('approve-device', { deviceId: id, publicKey: peer.device.publicKey, name: peer.device.name }).then(finish) : finish();
   }
 
   revoke() {
+    const id = this.state.device?.id;
     this.save({ ...this.state, device: null });
     this.pairing = null;
     for (const peer of [...this.peers.values()]) this.drop(peer.id);
     this.changed();
-    return this.snapshot();
+    return id && this.accountMode ? this.accountRequest('revoke-device', { deviceId: id }).then(() => this.snapshot()) : this.snapshot();
+  }
+
+  accountRequest(type, value) {
+    const requestId = crypto.randomBytes(18).toString('base64url');
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.accountRequests.delete(requestId); reject(Error('The device registry could not be updated. Reconnect and try again.')); }, 12000);
+      timer.unref();
+      this.accountRequests.set(requestId, { resolve, reject, timer });
+      try { this.send({ type, requestId, ...value }); }
+      catch (error) { clearTimeout(timer); this.accountRequests.delete(requestId); reject(error); }
+    });
   }
 
   authenticate(peer) {
@@ -158,13 +212,14 @@ class MobileAccess extends EventEmitter {
     for (const peer of [...this.peers.values()]) if (this.now() - peer.lastSeenAt >= (peer.authenticated ? PEER_TIMEOUT_MS : 15000) && this.pairing?.pending !== peer) this.drop(peer.id);
   }
 
-  async receive(id, payload) {
+  async receive(id, payload, accountDeviceId) {
     if (!this.state.enabled || this.connection !== 'connected' || typeof id !== 'string' || id.length > 100) return;
     try {
       let peer = this.peers.get(id);
       if (!peer) {
         if (payload?.type !== 'hello' || this.peers.size >= 8) throw new Error('Connection rejected.');
         const identity = protocol.publicIdentity(payload.publicKey);
+        if (this.accountMode && identity.id !== accountDeviceId) throw Error('Phone account identity mismatch.');
         if (this.state.device && identity.id !== this.state.device.id) throw new Error('Phone is not paired.');
         if (!this.state.device && (!this.pairing || this.pairing.expiresAt <= this.now())) throw new Error('Pairing is not open.');
         const ephemeral = protocol.createEphemeral();
@@ -212,11 +267,21 @@ class MobileAccess extends EventEmitter {
     }
   }
 
-  connect() {
-    if (this.stopped || !this.state.enabled || !this.relay || this.socket) return;
+  async connect() {
+    if (this.stopped || !this.state.enabled || !this.relay || this.socket || this.startingAccount) return;
     this.connection = 'connecting';
     this.error = null;
     this.changed();
+    const generation = this.connectionGeneration;
+    let accessToken;
+    if (this.getAccountToken) {
+      this.startingAccount = true;
+      try { accessToken = await this.getAccountToken(this.relay); }
+      catch (error) { if (generation === this.connectionGeneration) { this.connection = 'sign-in-required'; this.error = error.message; this.changed(); } return; }
+      finally { this.startingAccount = false; }
+      if (generation !== this.connectionGeneration || this.stopped || !this.state.enabled) return;
+    }
+    this.accountMode = Boolean(accessToken);
     const socket = this.socket = new this.WebSocket(`${this.relay}/v1/host`, { maxPayload: 2 * protocol.MAX_PACKET_BYTES, perMessageDeflate: false, handshakeTimeout: 10000, followRedirects: false });
     const timeout = setTimeout(() => socket.terminate(), 15000);
     timeout.unref();
@@ -229,15 +294,20 @@ class MobileAccess extends EventEmitter {
           if (message.type === 'challenge' && /^[A-Za-z0-9_-]{43}$/.test(message.nonce)) {
             const identity = this.state.identity;
             const hostId = protocol.publicIdentity(identity.publicKey).id;
-            this.send({ type: 'register', publicKey: identity.publicKey, signature: protocol.sign(this.unprotect(identity.privateKey), protocol.relayTranscript(hostId, message.nonce)) });
+            this.send({ type: 'register', publicKey: identity.publicKey, signature: protocol.sign(this.unprotect(identity.privateKey), protocol.relayTranscript(hostId, message.nonce)), ...(accessToken ? { accessToken, name: require('node:os').hostname() } : {}) });
+            accessToken = null;
           } else if (message.type === 'registered') {
             registered = true;
             clearTimeout(timeout);
             this.connection = 'connected';
             this.retryCount = 0;
+            if (this.prepareRequested) this.pair();
             this.changed();
           } else socket.terminate();
-        } else if (message.type === 'peer') void this.receive(message.peerId, message.payload);
+        } else if (message.type === 'account-result') {
+          const request = this.accountRequests.get(message.requestId);
+          if (request) { clearTimeout(request.timer); this.accountRequests.delete(message.requestId); message.ok === true ? request.resolve() : request.reject(Error('The device registry refused this change.')); }
+        } else if (message.type === 'peer') void this.receive(message.peerId, message.payload, message.deviceId);
         else if (message.type === 'peer-closed') this.drop(message.peerId);
       } catch { socket.terminate(); }
     });
@@ -246,8 +316,11 @@ class MobileAccess extends EventEmitter {
       clearTimeout(timeout);
       if (socket !== this.socket) return;
       this.socket = null;
+      this.rejectAccountRequests();
       for (const peer of [...this.peers.values()]) this.drop(peer.id);
+      const preparing = this.prepareRequested;
       this.cancelPairing();
+      this.prepareRequested = preparing;
       this.connection = this.state.enabled && !this.stopped ? 'disconnected' : 'disabled';
       this.changed();
       if (this.state.enabled && !this.stopped) {
@@ -258,13 +331,20 @@ class MobileAccess extends EventEmitter {
   }
 
   disconnect() {
+    this.connectionGeneration++;
     clearTimeout(this.retry);
     this.cancelPairing();
     for (const peer of [...this.peers.values()]) this.drop(peer.id);
     const socket = this.socket;
     this.socket = null;
     socket?.terminate();
+    this.rejectAccountRequests();
     this.connection = 'disabled';
+  }
+
+  rejectAccountRequests() {
+    for (const request of this.accountRequests.values()) { clearTimeout(request.timer); request.reject(Error('The connection service disconnected before saving the change.')); }
+    this.accountRequests.clear();
   }
 
   close() {

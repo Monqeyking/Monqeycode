@@ -1,10 +1,13 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, safeStorage, Tray } = require('electron');
 const { badgeBitmap } = require('./attention.cjs');
 const { execFileSync, spawn } = require('node:child_process');
-const { appendFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } = require('node:fs');
+const { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } = require('node:fs');
 const { createServer } = require('node:net');
 const path = require('node:path');
 const { resolvePaths, repairRuntimeLinks } = require('./paths.cjs');
+const { windowChrome, installDesktopChrome } = require('./desktop-chrome.cjs');
+const { installBrowserLinks } = require('./browser-links.cjs');
+const { APP_ID, stableExecutable, repairShortcuts } = require('./shortcuts.cjs');
 
 app.setName?.('Monqey Agent');
 
@@ -25,6 +28,7 @@ let unreadNotifications = 0;
 let mobileAccess;
 let appPaths;
 let pathError;
+let appIconPath;
 const desktopNotifications = new Set();
 
 // Resolve storage before Electron acquires its profile-specific instance lock.
@@ -44,6 +48,16 @@ try {
 function taskbarBadge(count) {
   const bitmap = badgeBitmap(count);
   return bitmap ? nativeImage.createFromBitmap(bitmap.buffer, { width: bitmap.width, height: bitmap.height }) : null;
+}
+
+function applicationIcon() {
+  if (!appIconPath) {
+    // Windows shell properties must survive the portable app's temporary extraction folder.
+    const file = path.join(appPaths.electronData, 'monqey.ico');
+    copyFileSync(path.join(__dirname, 'assets', 'monqey.ico'), file);
+    appIconPath = file;
+  }
+  return appIconPath;
 }
 
 function setTaskbarBadge(count) {
@@ -73,7 +87,7 @@ ipcMain.on('monqey-code:pending-attention', (event, count) => {
 ipcMain.on('monqey-code:desktop-notification', (event, message) => {
   if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents || mainWindow.isFocused()) return;
   if (!message || typeof message.title !== 'string' || typeof message.body !== 'string' || !Notification.isSupported()) return;
-  const notification = new Notification({ title: message.title.slice(0, 100), body: message.body.slice(0, 300), icon: path.join(__dirname, 'assets', 'monqey.ico') });
+  const notification = new Notification({ title: message.title.slice(0, 100), body: message.body.slice(0, 300), icon: applicationIcon() });
   notification.requiresInput = message.requiresInput === true;
   desktopNotifications.add(notification);
   notification.on('click', () => { showMainWindow(); notification.close(); });
@@ -100,7 +114,7 @@ if (!hasSingleInstanceLock) {
     mainWindow.focus();
   });
 }
-if (process.platform === 'win32') app.setAppUserModelId('com.monqey.code');
+if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
 
 // Some Windows setups cannot load Electron's GPU subprocess dependencies.
 // The DSH web UI does not need hardware acceleration, so keep startup reliable.
@@ -214,7 +228,7 @@ function quitFromTray() {
 
 function ensureTray() {
   if (process.platform !== 'win32' || tray) return;
-  tray = new Tray(path.join(__dirname, 'assets', 'monqey.ico'));
+  tray = new Tray(applicationIcon());
   tray.setToolTip('Monqey Agent');
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open Monqey Agent', click: showMainWindow },
@@ -233,15 +247,22 @@ function showHarness(url) {
       minWidth: 960,
       minHeight: 640,
       title: 'Monqey Agent',
-      icon: path.join(__dirname, 'assets', 'monqey.ico'),
+      show: false,
+      icon: applicationIcon(),
       backgroundColor: '#171717',
-      autoHideMenuBar: true,
+      ...windowChrome,
+      autoHideMenuBar: false,
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
         preload: path.join(__dirname, 'preload.js')
       }
     });
+    installDesktopChrome({ app, win: mainWindow, ipcMain, Menu, dialog, origin: url, quit: quitFromTray,
+      iconPath: applicationIcon(), executable: process.env.PORTABLE_EXECUTABLE_FILE || process.execPath
+    });
+    installBrowserLinks(mainWindow, link => require('electron').shell.openExternal(link), error => writeFailureLog(`Could not open the browser extension store: ${error.message}`));
+    mainWindow.show();
   }
 
   mainWindow.on('focus', () => {
@@ -268,7 +289,7 @@ function showHarness(url) {
   if (!mobileAccess) {
     const { installMobileAccess } = require('./mobile-desktop.cjs');
     mobileAccess = installMobileAccess({
-      app, ipcMain, safeStorage, getWindow: () => mainWindow, origin: url,
+      app, ipcMain, safeStorage, openExternal: url => require('electron').shell.openExternal(url), getWindow: () => mainWindow, origin: url,
       relay: process.env.MONQEY_MOBILE_RELAY_URL || require('./package.json').mobileAccessRelayUrl
     });
   }
@@ -380,7 +401,18 @@ async function startDsh() {
   }, 180_000);
 }
 
-if (hasSingleInstanceLock) app.whenReady().then(startDsh);
+if (hasSingleInstanceLock) app.whenReady().then(() => {
+  if (process.platform === 'win32' && appPaths) {
+    const executable = stableExecutable({ home:appPaths.home, packaged:app.isPackaged });
+    if (executable) {
+      try {
+        const result = repairShortcuts({ shell:require('electron').shell, home:appPaths.home, executable, appData:app.getPath('appData'), desktop:app.getPath('desktop') });
+        for (const error of result.errors) writeFailureLog(`Shortcut repair failed (${error.file}): ${error.message}`);
+      } catch (error) { writeFailureLog(`Shortcut repair failed: ${error.message}`); }
+    }
+  }
+  return startDsh();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

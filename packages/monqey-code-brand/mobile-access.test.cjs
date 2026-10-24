@@ -21,6 +21,7 @@ test('Mobile Access registers in Settings and displays actual device state in En
   const jsx = (type, props) => ({ type, props });
   const bridge = {
     getStatus: async () => snapshot,
+    setConnectionService: async relayUrl => { calls.push(['configure', relayUrl]); snapshot = { ...snapshot, relayUrl, serviceConfigured: true, enabled: false }; return snapshot; },
     setEnabled: async enabled => { calls.push(['enable', enabled]); return snapshot; },
     pairPhone: async () => { calls.push(['pair']); return snapshot; },
     approvePhone: async id => { calls.push(['approve', id]); return snapshot; },
@@ -42,7 +43,21 @@ test('Mobile Access registers in Settings and displays actual device state in En
   tree = render();
   assert.match(text(tree), /Not configured/);
   assert.match(text(tree), /No phone paired/);
-  assert.equal(all(tree).find(node => node?.props?.role === 'switch').props.disabled, true);
+  assert.equal(all(tree).find(node => node?.type === 'button' && node.props.children === 'Show pairing code').props.disabled, true);
+  const address = all(tree).find(node => node?.type === 'input' && node.props.id === 'monqey-mobile-relay');
+  address.props.onChange({ target: { value: 'wss://relay.example' } });
+  tree = render();
+  const saveService = all(tree).find(node => node?.type === 'button' && node.props.children === 'Save connection service');
+  assert.equal(saveService.props.disabled, false);
+  saveService.props.onClick();
+  await new Promise(resolve => setImmediate(resolve));
+  tree = render();
+  assert.equal(snapshot.enabled, false);
+  assert.equal(all(tree).find(node => node?.type === 'input' && node.props.id === 'monqey-mobile-relay').props.value, 'wss://relay.example');
+  const show = all(tree).find(node => node?.type === 'button' && node.props.children === 'Show pairing code');
+  assert.equal(show.props.disabled, false, 'Showing a code must not require a separate enable action');
+  show.props.onClick();
+  await new Promise(resolve => setImmediate(resolve));
   snapshot = { enabled: true, serviceConfigured: true, serviceStatus: 'connected', device: { name: 'My iPhone', platform: 'iOS', status: 'Offline', lastSeenAt: 1700000000000, fingerprint: 'phone-key-123456789' }, pairing: null };
   await poll();
   tree = render();
@@ -56,7 +71,7 @@ test('Mobile Access registers in Settings and displays actual device state in En
   const revoke = all(tree).find(node => node?.type === 'button' && node.props.children === 'Revoke Access');
   await revoke.props.onClick();
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(calls, [['revoke']]);
+  assert.deepEqual(calls, [['configure', 'wss://relay.example'], ['pair'], ['revoke']]);
   snapshot = { ...snapshot, pairing: { qrCode: 'data:image/png;base64,test', expiresAt: Date.now() + 120000 }, pendingDevice: { id: 'phone-1', name: 'My Phone', platform: 'Android', fingerprint: 'key-123456789012345' } };
   await poll();
   tree = render();

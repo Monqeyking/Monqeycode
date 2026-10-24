@@ -108,6 +108,58 @@ test('No service means no pairing; disabled settings survive reload without crea
   } finally { manager.close(); cleanDirectory(directory); }
 });
 
+test('Public QR links keep the secret in the fragment; cancelling preparation prevents a later QR', async () => {
+  const directory = temporaryDirectory();
+  const manager = new MobileAccess({ filePath: path.join(directory, 'state.json'), relay: require('./mobile-account-config.json').relay, protect: x => x, unprotect: x => x, WebSocket, openRuntime() {} });
+  try {
+    manager.state = { ...manager.state, enabled: true, identity: protocol.createIdentity() };
+    manager.connection = 'connected';
+    const invite = new URL(manager.preparePairing().pairing.uri);
+    const fragment = new URLSearchParams(invite.hash.slice(1));
+    assert.equal(invite.origin, 'https://monqey-agent-relay.onrender.com');
+    assert.equal(invite.pathname, '/pair');
+    assert.equal(invite.search, '');
+    assert.equal(fragment.get('key'), manager.state.identity.publicKey);
+    assert.equal(fragment.get('code'), manager.pairing.secret);
+    assert.equal(fragment.has('relay'), false);
+    manager.cancelPairing();
+    let finish;
+    manager.getAccountToken = () => new Promise(resolve => { finish = resolve; });
+    manager.connection = 'disabled';
+    assert.equal(manager.preparePairing().preparingPairing, true);
+    manager.cancelPairing();
+    manager.enable(false);
+    finish('unused-fixture-token');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(manager.snapshot().pairing, null);
+    assert.equal(manager.snapshot().preparingPairing, false);
+    assert.equal(manager.socket, null);
+  } finally { manager.close(); cleanDirectory(directory); }
+});
+
+test('Connection service changes validate, persist and require a fresh enable action', () => {
+  const directory = temporaryDirectory();
+  const options = { filePath: path.join(directory, 'state.json'), protect: x => x, unprotect: x => x, WebSocket, openRuntime: () => {} };
+  const manager = new MobileAccess(options);
+  try {
+    for (const address of [null, {}, 123, 'ws://192.168.0.10', 'wss://user:password@example.com', 'wss://example.com/private', 'x'.repeat(2049)]) assert.throws(() => manager.configureRelay(address));
+    assert.equal(fs.existsSync(options.filePath), false);
+    manager.configureRelay(' wss://relay.example ');
+    assert.equal(manager.snapshot().enabled, false);
+    assert.equal(manager.snapshot().relayUrl, 'wss://relay.example');
+    assert.equal(manager.state.identity, null);
+    let restored = new MobileAccess({ ...options, relay: 'wss://packaged-default.example' });
+    assert.equal(restored.snapshot().relayUrl, 'wss://relay.example'); restored.close();
+    manager.state.device = { id: 'paired-phone' };
+    assert.throws(() => manager.configureRelay('wss://new-relay.example'), /Revoke/);
+    assert.equal(manager.snapshot().relayUrl, 'wss://relay.example');
+    manager.state.device = null;
+    manager.configureRelay('');
+    restored = new MobileAccess({ ...options, relay: 'wss://packaged-default.example' });
+    assert.equal(restored.snapshot().serviceConfigured, false); restored.close();
+  } finally { manager.close(); cleanDirectory(directory); }
+});
+
 test('Real relay + desktop + phone: approve, RPC, stream, reconnect, revoke and expiry', { timeout: 20000 }, async () => {
   const directory = temporaryDirectory();
   const service = http.createServer((req, res) => { res.writeHead(404); res.end(); });
@@ -141,9 +193,12 @@ test('Real relay + desktop + phone: approve, RPC, stream, reconnect, revoke and 
   const sockets = [];
   const device = protocol.createIdentity();
   try {
-    manager.enable(true);
-    await waitFor(() => manager.snapshot().serviceStatus === 'connected');
-    let invitation = new URL(manager.pair().pairing.uri);
+    const preparing = manager.preparePairing();
+    assert.equal(preparing.enabled, true);
+    assert.equal(preparing.preparingPairing, true);
+    await waitFor(() => manager.snapshot().pairing);
+    assert.equal(manager.snapshot().preparingPairing, false);
+    let invitation = new URL(manager.snapshot().pairing.uri);
     const hostKey = invitation.searchParams.get('key');
     const secret = invitation.searchParams.get('code');
     const wrongCode = await connectPhone(address, hostKey, device, 'wrong-code', sockets);

@@ -26,3 +26,10 @@
     thresholdChars: 8192
     headChars: 4096
     tailChars: 1024
+
+- id: browserskill
+  config:
+    bskPath: !!js dshHomePath('vendor/browserskill/bsk.exe')
+    sessionStateDirectory: !!js dshHomePath('storages/browser/dsh-starts')
+    lazyTools: true
+    maxSessions: 3

@@ -1,17 +1,21 @@
 {
   "name": "monqey-code-desktop",
-  "version": "0.0.5",
+  "version": "0.0.16",
   "private": true,
   "description": "Minimal Electron wrapper for the existing DSH web profile",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "test:paths": "node --test paths.test.cjs launcher.test.cjs",
-    "test:mobile": "node --test mobile-access.test.cjs mobile-desktop.test.cjs ../packages/monqey-code-brand/mobile-access.test.cjs",
+    "test:chrome": "node --test desktop-chrome.test.cjs icons.test.cjs shortcuts.test.cjs ../packages/monqey-code-brand/environment.test.cjs",
+    "test:mobile": "node --test mobile-account.test.cjs mobile-access.test.cjs mobile-desktop.test.cjs ../packages/monqey-code-brand/mobile-access.test.cjs",
     "relay:mobile": "node mobile-relay.cjs",
     "prepare:qoder-runtime": "node prepare-qoder-runtime.cjs",
-    "prebuild": "npm run prepare:qoder-runtime",
-    "build": "electron-builder --win portable"
+    "prepare:browser": "node ../packages/monqey-code-workspace-tools/setup-browser.cjs",
+    "test:workspace-tools": "node --test browser-links.test.cjs ../packages/monqey-code-workspace-tools/test/*.test.mjs",
+    "prebuild": "npm run prepare:qoder-runtime && npm run prepare:browser",
+    "build": "electron-builder --win portable",
+    "postbuild": "electron shortcuts-setup.cjs"
   },
   "devDependencies": {
     "electron": "latest",
@@ -21,7 +25,7 @@
     "appId": "com.monqey.code",
     "productName": "Monqey Agent",
     "directories": {
-      "output": "dist-mobile-access"
+      "output": "dist-cowork"
     },
     "asar": true,
     "icon": "assets/monqey.ico",
@@ -29,7 +33,12 @@
       "main.js",
       "paths.cjs",
       "attention.cjs",
+      "desktop-chrome.cjs",
+      "browser-links.cjs",
+      "shortcuts.cjs",
       "mobile-access.cjs",
+      "mobile-account.cjs",
+      "mobile-account-config.json",
       "mobile-desktop.cjs",
       "mobile-protocol.cjs",
       "mobile-runtime.cjs",

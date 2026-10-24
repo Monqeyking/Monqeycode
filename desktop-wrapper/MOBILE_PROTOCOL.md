@@ -1,9 +1,15 @@
 # Monqey Agent mobile protocol v1
 
-This protocol connects a future mobile client to the existing desktop agent
+This protocol connects the separate mobile client to the existing desktop agent
 runtime. The desktop authorizes one phone key, not an IP address or device label.
 The relay is a routable service; it does not decide which device may run commands.
-No mobile client or public relay is shipped by this change.
+The mobile repository has a native pairing preview. No public relay is configured
+or deployed by the desktop build. Remote agent actions in the phone remain pending.
+
+In wrapper 0.0.9, configure the actual service in Settings → Mobile Access.
+Saving a new address disables access and cancels pending invitations; paired
+devices must be revoked first. A saved profile setting takes precedence over
+the environment and package defaults. Empty saved settings clear the service.
 
 ## Pair and reconnect
 
@@ -12,8 +18,13 @@ No mobile client or public relay is shipped by this change.
    `JSON.stringify(["monqey-mobile-v1","relay",hostId,nonce])`. Relay responds
    `{type:"registered"}`. `hostId` is SHA256 of the desktop public SPKI DER,
    encoded base64url without padding.
-2. **Pair Phone** generates a random 256-bit secret valid for two minutes. The
-   QR contains `monqeycode://pair?v=1&relay=...&key=...&code=...`. The client keeps
+2. Sign-in prepares the QR automatically; an already signed-in user chooses
+   **Show pairing code** to enable and connect in one action. Cancelling stops
+   preparation. A random 256-bit secret remains valid for two minutes. The
+   bundled service uses `https://monqey-agent-relay.onrender.com/pair#v=1&key=...&code=...`;
+   fragments stay off the HTTP request. Android App Links open the mobile app,
+   with a browser page and explicit Open Monqey Agent action as fallback.
+   Custom services keep `monqeycode://pair?v=1&relay=...&key=...&code=...`. The client keeps
    the relay and pinned desktop key after pairing and discards the secret.
 3. Phone connects to `<relay>/v1/device?host=<hostId>` and sends
    `{type:"hello",publicKey,ephemeralKey,name,platform}`. `platform` is `iOS` or

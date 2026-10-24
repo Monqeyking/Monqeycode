@@ -1,0 +1,9 @@
+- id: session-query-sqlite
+  config:
+    path: ':memory:'
+    openAt: first-search
+    snippetChars: 320
+
+- insert:
+    - id: monqey-memory
+      name: monqey-code-memory

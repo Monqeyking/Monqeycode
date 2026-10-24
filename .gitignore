@@ -18,6 +18,7 @@ electron-builder-cache/
 profiles/node_modules.pre-update-*/
 desktop-wrapper/node_modules/
 desktop-wrapper/dist/
+desktop-wrapper/dist-cowork*/
 desktop-wrapper/dist-mobile*/
 desktop-wrapper/dist-qoder*/
 desktop-wrapper/.webpack/
@@ -28,6 +29,7 @@ desktop-wrapper/assets/*preview.png
 *.msi
 *.dmg
 *.AppImage
+*.apk
 
 # Local runtime data and temporary source checkouts
 attachments/

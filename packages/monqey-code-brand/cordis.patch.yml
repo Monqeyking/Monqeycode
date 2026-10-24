@@ -1,4 +1,8 @@
-# Replace the official occupants with the local Monqey Code identity.
+# Use Monqey Agent as both the visible and model-facing product identity.
+- id: system-prompt
+  config:
+    includeHarnessIdentity: false
+
 - id: ui-brand-official
   disabled: true
 

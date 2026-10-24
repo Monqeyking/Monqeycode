@@ -23,7 +23,7 @@ test('Models settings shows live refresh results and updates when catalogs chang
   const ctx = {
     remote, modelDirectories: {},
     slots: { inject: (_, callback) => callback(), register(options, view) { if (options.id === 'monqey-model-catalog-status') component = view; } },
-    inject: (_, callback) => callback(ctx)
+    inject: (dependencies, callback) => { if (dependencies.includes('modelDirectories')) callback(ctx); }
   };
   plugin.apply(ctx);
   component({ remote });

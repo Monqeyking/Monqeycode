@@ -15,7 +15,7 @@ npm install
 npm run build
 ```
 
-The portable executable is written to `dist-mobile-access`. Reuse this output
+The portable executable is written to `dist-cowork`. Reuse this output
 directory for subsequent builds rather than creating a new `dist-*` directory
 for each experiment.
 
@@ -29,7 +29,7 @@ Electron into a temporary directory. The root is identified by
 folder name, drive, username, working directory, or AppData location.
 
 Keep the executable inside this root, normally in
-`desktop-wrapper/dist-mobile-access`. `MONQEY_HOME` can explicitly select another
+`desktop-wrapper/dist-cowork`. `MONQEY_HOME` can explicitly select another
 application root. A missing root produces an error instead of silently opening
 an empty user profile elsewhere. The desktop sets `DSH_HOME` to this same root.
 
@@ -58,7 +58,8 @@ device name/platform, live Connected/Offline state, last seen, and immediate
 revocation. Switching access off disconnects the phone but retains its pairing;
 **Revoke Access** forgets it. Pair again to authorize a replacement phone.
 
-This is the desktop side and the relay implementation, not a released mobile app.
+This is the desktop side and the relay implementation. The separate mobile
+repository has a 0.2.0 native QR/pairing preview; agent actions are not connected yet.
 There is no production connection service configured in this repository. The
 shipped UI reports **Not configured** and disables pairing until a service is
 provided. It does not claim that a phone is connected merely because the relay is
@@ -67,11 +68,19 @@ reachable. No router configuration or VPN is part of the intended user flow.
 For release engineering, deploy `mobile-relay.cjs` behind an HTTPS reverse proxy
 with WebSocket upgrades, connection/rate limits, and normal service monitoring.
 It listens only on `127.0.0.1` (`PORT`, default 8787); `/health` is its health check.
-Set `mobileAccessRelayUrl` in the desktop package manifest before building, e.g.
-a provisioned `wss://` origin, to make the service built in for end users.
-`MONQEY_MOBILE_RELAY_URL` overrides this for development. Plain `ws://` is accepted
+In wrapper 0.0.9, enter the actual WSS origin in **Connection service address**
+and choose **Save connection service**. It is persisted in the current user
+profile; changing it cancels invitations and disables access. A paired phone must
+be revoked first. Enable access, wait for the service to connect, then choose
+**Pair Phone**. The Android app scans the QR; compare the device keys and approve
+locally. No service is deployed automatically.
+
+`mobileAccessRelayUrl` in the package manifest provides an optional build default.
+`MONQEY_MOBILE_RELAY_URL` overrides that default for development. A saved setting
+takes precedence over both; saving an empty address explicitly clears the service.
+Plain `ws://` is accepted
 only for loopback tests. No production endpoint is invented or contacted by
-default. The mobile client and real-phone/Internet validation remain to be done.
+default. Real-phone/Internet validation remains to be done.
 
 The relay authenticates the computer's P-256 key and routes bounded packets.
 Desktop/phone establish fresh P-256 ECDH keys; HKDF-SHA256 derives separate
@@ -88,7 +97,48 @@ Run `npm run test:mobile` for the encrypted phone/relay/runtime integration and
 the settings/IPC checks. These use a simulated phone and disposable local state;
 they do not send a model prompt or change provider/default-model settings.
 
+`npx electron mobile-native-smoke.cjs` additionally checks the actual isolated
+preload/IPC flow, secure native identity storage, relay connection and 320px QR
+rendering. It uses a disposable profile and never starts the user's runtime.
+
 The mobile wire contract is described in [MOBILE_PROTOCOL.md](MOBILE_PROTOCOL.md).
 After rebuilding, choose **Quit Monqey Agent** in the tray, open the new executable,
 then open **Settings → Mobile Access**. A page refresh alone cannot update the
 desktop IPC bridge or start a connection service.
+# Browser and restore points (0.0.15)
+
+Settings → Browser connects the pinned official BrowserSkill integration to Chrome
+or Edge. Brave uses the same Chrome Web Store extension; verify its connection before relying on it. Install its browser extension once, enable the extension's local
+connection and select **Check connection**. Use `/browser-skill` in an agent.
+Browser access requires Workspace Write; the agent's owned browser sessions have
+upstream live previews and stop controls. Local browser state stays inside
+`Monqey-Agent/storages/browser`; the CLI lives in `vendor/browserskill`.
+
+**Restore points** above the composer capture registered workspace source files
+around agent edits and terminal actions. File edits use targeted snapshots. If a
+workspace is too large for a terminal snapshot, the terminal action continues and
+the UI reports limited coverage; targeted file snapshots remain available.
+Preview, compare and explicitly select
+files before restoring. Newer file hashes, changed shared metadata, active agents
+and read-only mode block restoration. A recovery point is captured first. Cloud
+edits that have not synced yet cannot be detected. These points restore files,
+not conversation history or changes made to websites. See
+`packages/monqey-code-workspace-tools/README.md` for exclusions and storage limits.
+
+After updating, quit through the tray menu and reopen the desktop shortcut. The
+running app is not forcibly restarted by the update.
+
+## Windows shortcuts (0.0.16)
+
+After a portable build, `shortcuts-setup.cjs` repairs the Monqey Start-menu entry
+and existing Monqey desktop/taskbar shortcuts with the original portable EXE,
+its embedded icon and AppUserModelID `com.monqey.code`. Packaged app startup
+performs the same check before creating a window or showing notifications.
+Development Electron launches and extracted executables outside the application
+root cannot register themselves. Missing desktop/taskbar entries are not created
+or pinned. Existing legacy Monqey Code links are kept working as aliases.
+
+Every changed link is backed up under `electron-data/shortcut-backups`; unchanged
+links are not rewritten. Updates are read back using Windows' native shortcut
+API. Startup repair failures are logged and do not interrupt agent work; the
+post-build repair reports failure so a build cannot silently claim valid links.

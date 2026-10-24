@@ -3,17 +3,23 @@
   "private": true,
   "dependencies": {
     "@deepseek-ai/dsh-api-remotes": "link:../../packages/monqey-code-api-remotes",
-    "@qoder-ai/qoder-agent-sdk": "^1.0.53",
-    "dsh-native-codex-oauth": "github:kfc966/dsh-native-codex-oauth",
+    "@deepseek-ai/dsh-client-ui-chat": "link:../../packages/monqey-code-ui-chat",
+    "@deepseek-ai/dsh-client-ui-settings-models": "link:../../packages/monqey-code-ui-settings-models",
+    "@deepseek-ai/dsh-client-ui-sidebar": "link:../../packages/monqey-code-ui-sidebar",
     "@deepseek-ai/dsh-launch-environment": "^0.1.5-rc.2",
-    "zod": "^4.5.4",
-    "monqey-code-brand": "link:../../packages/monqey-code-brand",
     "@deepseek-ai/dsh-llm": "link:../../packages/monqey-code-llm",
     "@deepseek-ai/dsh-llm-pi-ai": "link:../../packages/monqey-code-llm-pi-ai",
-    "@deepseek-ai/dsh-client-ui-settings-models": "link:../../packages/monqey-code-ui-settings-models",
+    "@qoder-ai/qoder-agent-sdk": "^1.0.53",
+    "@wxg-prc-cpg/browser-skill-dsh-plugin": "0.3.3",
+    "dsh-native-codex-oauth": "github:kfc966/dsh-native-codex-oauth",
+    "monqey-code-brand": "link:../../packages/monqey-code-brand",
+    "monqey-code-cowork": "link:../../packages/monqey-code-cowork",
+    "monqey-code-delegation": "link:../../packages/monqey-code-delegation",
     "monqey-code-mcp": "link:../../packages/monqey-code-mcp",
+    "monqey-code-memory": "link:../../packages/monqey-code-memory",
     "monqey-code-notifications": "link:../../packages/monqey-code-notifications",
-    "monqey-code-delegation": "link:../../packages/monqey-code-delegation"
+    "monqey-code-workspace-tools": "link:../../packages/monqey-code-workspace-tools",
+    "zod": "^4.5.4"
   },
   "dsh": {
     "profile": {
@@ -24,7 +30,11 @@
         "monqey-code-brand",
         "monqey-code-mcp",
         "monqey-code-notifications",
-        "monqey-code-delegation"
+        "monqey-code-delegation",
+        "monqey-code-cowork",
+        "monqey-code-memory",
+        "monqey-code-workspace-tools",
+        "@wxg-prc-cpg/browser-skill-dsh-plugin"
       ],
       "patchReload": "live"
     }
