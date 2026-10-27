@@ -1219,27 +1219,54 @@ window.__ModuleLoader__.load({
 			const routeInvalid = route.length > 0 && !ROUTE_PATTERN.test(route);
 			const routeTaken = taken.includes(route);
 			const normalizedBaseURL = baseURL.trim();
+			/* Route id and display name are optional: a short id is derived from the name or
+			 * the endpoint host, so a new provider only needs an endpoint and a key. */
+			const derivedRoute = (() => {
+				const slugOf = (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+				let host = "";
+				try {
+					host = new URL(normalizedBaseURL).hostname.replace(/^(www|api)\./, "").split(".")[0] ?? "";
+				} catch {}
+				const stem = slugOf(displayName) || slugOf(host) || "custom";
+				const base = /^[a-z]/.test(stem) ? stem : `p-${stem}`;
+				let name = base;
+				for (let n = 2; taken.includes(name); n++) name = `${base}-${n}`;
+				return name;
+			})();
+			const effectiveRoute = route.length > 0 ? route : derivedRoute;
 			const baseUrlInvalid = baseURL.length > 0 && !isHttpUrl(normalizedBaseURL);
 			const modelFailure = validateDeepSeekModels(models);
 			const keyFailure = apiKeyFailure(keyDraft);
 			const keyValue = keyDraft.trim();
-			const ready = route.length > 0 && !routeInvalid && !routeTaken && normalizedBaseURL.length > 0 && !baseUrlInvalid && models.length > 0 && modelFailure === void 0 && keyFailure === void 0;
-			const hint = failure !== void 0 || ready || keyFailure !== void 0 || route.length === 0 || routeInvalid || routeTaken || baseUrlInvalid ? void 0 : normalizedBaseURL.length === 0 ? t("customNeedsBaseUrl") : modelFailure !== void 0 ? `${t("model")} ${String(modelFailure.index + 1)}: ${t(modelFailure.key)}` : t("customNeedsModels");
+			const ready = !routeInvalid && !routeTaken && normalizedBaseURL.length > 0 && !baseUrlInvalid && modelFailure === void 0 && keyFailure === void 0;
+			const hint = failure !== void 0 || ready || keyFailure !== void 0 || routeInvalid || routeTaken || baseUrlInvalid ? void 0 : normalizedBaseURL.length === 0 ? t("customNeedsBaseUrl") : modelFailure !== void 0 ? `${t("model")} ${String(modelFailure.index + 1)}: ${t(modelFailure.key)}` : t("customNeedsModels");
 			/** Perform the create, returning a failure message or undefined. */
 			const createOnce = async () => {
-				const keyRef = deriveKeyRef(route);
+				const keyRef = deriveKeyRef(effectiveRoute);
 				const storesKey = keyValue.length > 0;
 				if (!committed) {
+					let chosen = models;
+					if (chosen.length === 0) {
+						const answer = await operations.discoverModels(NS$1, {
+							baseURL: normalizedBaseURL,
+							api: protocol,
+							...keyValue.length === 0 ? {} : { apiKey: keyValue }
+						});
+						if (answer.kind === "refused") return answer.message;
+						if (answer.models.length === 0) return t("fetchEmpty");
+						chosen = answer.models.map(adopt);
+						setModels(chosen);
+					}
 					const profile = {
 						...displayName.length === 0 ? {} : { displayName },
 						...storesKey ? { apiKeyEnv: keyRef } : {},
 						api: protocol,
 						baseURL: normalizedBaseURL,
-						models: models.map((model) => ({ ...model }))
+						models: chosen.map((model) => ({ ...model }))
 					};
 					const written = await operations.writeSettings(NS$1, [{
 						op: "set",
-						path: ["providers", route],
+						path: ["providers", effectiveRoute],
 						value: profile
 					}], openedAt);
 					if (written.kind !== "written") return written.kind === "conflict" ? t("conflict") : written.message;
@@ -1283,7 +1310,7 @@ window.__ModuleLoader__.load({
 							className: ModelsSection_module_css_default["input"],
 							type: "text",
 							value: route,
-							placeholder: "acme-gateway",
+							placeholder: derivedRoute,
 							"aria-label": t("customRoute"),
 							disabled: profileDisabled,
 							onChange: (event) => {
@@ -1307,7 +1334,7 @@ window.__ModuleLoader__.load({
 							className: ModelsSection_module_css_default["input"],
 							type: "text",
 							value: displayName,
-							placeholder: route.length === 0 ? t("customDisplayName") : route,
+							placeholder: effectiveRoute,
 							"aria-label": t("customDisplayName"),
 							disabled: profileDisabled,
 							onChange: (event) => {

@@ -1,6 +1,11 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('monqeyDesktop', {
+  dictation: {
+    status: () => ipcRenderer.invoke('monqey-code:dictation', 'status'),
+    transcribe: (audio, language) => ipcRenderer.invoke('monqey-code:dictation', 'transcribe', audio, language),
+    cancel: () => ipcRenderer.invoke('monqey-code:dictation', 'cancel')
+  },
   chrome: {
     getInfo: () => ipcRenderer.invoke('monqey-code:desktop-chrome', 'info'),
     onAction(callback) {

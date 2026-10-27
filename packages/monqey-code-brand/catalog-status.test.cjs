@@ -19,7 +19,7 @@ test('Models settings shows live refresh results and updates when catalogs chang
   const react = { useState: () => [state, next => { state = next; }], useEffect: callback => { effect = callback; } };
   const jsx = (type, props) => ({ type, props });
   const browser = { __ModuleLoader__: { load: definition => { plugin = definition.factory(name => name === 'react' ? react : { jsx }); } } };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'lib/client.js'), 'utf8'), { window: browser, console, URL });
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'lib/client.js'), 'utf8'), { window: browser, console, URL, setInterval, clearInterval });
   const ctx = {
     remote, modelDirectories: {},
     slots: { inject: (_, callback) => callback(), register(options, view) { if (options.id === 'monqey-model-catalog-status') component = view; } },
@@ -37,6 +37,9 @@ test('Models settings shows live refresh results and updates when catalogs chang
   text = JSON.stringify(component({ remote }));
   assert.match(text, /Fixture provider: Up to date/);
   assert.doesNotMatch(text, /provider unavailable/);
+  catalogs = [{ provider: "qoder", name: "Qoder", state: "login-failed: Qoder login exited with code 1.", lastSuccess: null }];
+  await update();
+  assert.ok(JSON.stringify(component({ remote })).includes('Qoder: Sign-in failed (Qoder login exited with code 1.)'));
   cleanup();
   assert.equal(disposed, true);
 });

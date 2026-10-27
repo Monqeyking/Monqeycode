@@ -1,6 +1,6 @@
 {
   "name": "monqey-code-desktop",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "private": true,
   "description": "Minimal Electron wrapper for the existing DSH web profile",
   "main": "main.js",
@@ -13,6 +13,8 @@
     "prepare:qoder-runtime": "node prepare-qoder-runtime.cjs",
     "prepare:browser": "node ../packages/monqey-code-workspace-tools/setup-browser.cjs",
     "test:workspace-tools": "node --test browser-links.test.cjs ../packages/monqey-code-workspace-tools/test/*.test.mjs",
+    "prepare:speech": "node setup-speech.cjs",
+    "test:speech": "node --test dictation.test.cjs ../packages/monqey-code-brand/dictation.test.cjs",
     "prebuild": "npm run prepare:qoder-runtime && npm run prepare:browser",
     "build": "electron-builder --win portable",
     "postbuild": "electron shortcuts-setup.cjs"
@@ -35,6 +37,8 @@
       "attention.cjs",
       "desktop-chrome.cjs",
       "browser-links.cjs",
+      "dictation.cjs",
+      "DICTATION-LICENSE.txt",
       "shortcuts.cjs",
       "mobile-access.cjs",
       "mobile-account.cjs",
@@ -47,6 +51,7 @@
       "assets/monqey.ico"
     ],
     "extraResources": [
+      { "from": "dictation-worker.py", "to": "dictation-worker.py" },
       {
         "from": "../profiles/web/node_modules/@qoder-ai/qoder-agent-sdk/dist/_worker",
         "to": "qoder-agent-sdk/_worker"

@@ -26,6 +26,7 @@ let closeNoticePath;
 let pendingAttention = 0;
 let unreadNotifications = 0;
 let mobileAccess;
+let dictation;
 let appPaths;
 let pathError;
 let appIconPath;
@@ -110,6 +111,8 @@ if (!hasSingleInstanceLock) {
   app.on('second-instance', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
+    dictation = require('./dictation.cjs').installDictation({ win: mainWindow, ipcMain, home: appPaths.home, origin: url,
+      workerFile: app.isPackaged ? path.join(process.resourcesPath, 'dictation-worker.py') : path.join(__dirname, 'dictation-worker.py') });
     mainWindow.show();
     mainWindow.focus();
   });
@@ -421,6 +424,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   shuttingDown = true;
   mobileAccess?.close();
+  dictation?.close();
   clearTimeout(startupTimer);
   if (!dshProcess || dshProcess.killed) return;
   if (process.platform === 'win32') {

@@ -4,6 +4,8 @@
   "dependencies": {
     "@deepseek-ai/dsh-api-remotes": "link:../../packages/monqey-code-api-remotes",
     "@deepseek-ai/dsh-client-ui-chat": "link:../../packages/monqey-code-ui-chat",
+    "@deepseek-ai/dsh-client-ui-conversation": "link:../../packages/monqey-code-ui-conversation",
+    "@deepseek-ai/dsh-client-ui-model-selection": "link:../../packages/monqey-code-ui-model-selection",
     "@deepseek-ai/dsh-client-ui-settings-models": "link:../../packages/monqey-code-ui-settings-models",
     "@deepseek-ai/dsh-client-ui-sidebar": "link:../../packages/monqey-code-ui-sidebar",
     "@deepseek-ai/dsh-launch-environment": "^0.1.5-rc.2",

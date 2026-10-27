@@ -14,6 +14,12 @@ importers:
       '@deepseek-ai/dsh-client-ui-chat':
         specifier: link:../../packages/monqey-code-ui-chat
         version: link:../../packages/monqey-code-ui-chat
+      '@deepseek-ai/dsh-client-ui-conversation':
+        specifier: link:../../packages/monqey-code-ui-conversation
+        version: link:../../packages/monqey-code-ui-conversation
+      '@deepseek-ai/dsh-client-ui-model-selection':
+        specifier: link:../../packages/monqey-code-ui-model-selection
+        version: link:../../packages/monqey-code-ui-model-selection
       '@deepseek-ai/dsh-client-ui-settings-models':
         specifier: link:../../packages/monqey-code-ui-settings-models
         version: link:../../packages/monqey-code-ui-settings-models

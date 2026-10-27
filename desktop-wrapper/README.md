@@ -142,3 +142,33 @@ Every changed link is backed up under `electron-data/shortcut-backups`; unchange
 links are not rewritten. Updates are read back using Windows' native shortcut
 API. Startup repair failures are logged and do not interrupt agent work; the
 post-build repair reports failure so a build cannot silently claim valid links.
+
+## Local dictation (0.0.17)
+
+The composer microphone records only after a click. Click again to stop, or use
+Cancel to discard. A recording is limited to 60 seconds. Recognition runs locally
+using multilingual faster-whisper `base`, CPU int8, with automatic language
+detection and no language selector in the composer. Text is appended through the native session editor, preserving
+existing text and references; it is never automatically sent. A changed/closed
+session cancels dictation. Failed insertion retains a copyable transcript.
+
+Run `npm run prepare:speech` with `uv` installed (or pass its executable to
+`node setup-speech.cjs`). Setup downloads a dedicated Python 3.12.12 into
+`vendor/speech`, installs faster-whisper 1.2.1 and PyAV 16.0.1, and downloads the
+multilingual model into `storages/speech/base`. Runtime paths are relative to the
+Monqey root. It does not modify system Python. The optional engine/model files are
+outside the portable desktop EXE and must accompany an installation that enables
+speech. Setup needs internet; recognition runs with model-network access disabled.
+No raw audio is written to disk by the dictation engine or sent to the relay/model
+provider. The engine starts lazily; cancel, navigation and app exit stop its process.
+
+The Whisper/VAD approach derives from the MIT community project
+`tonyd2wild/DeepSeek-Harness-Dictation` (`dsh-0.1`); its notice is included in
+`DICTATION-LICENSE.txt`. The larger upstream live/auto-send UI and unauthenticated
+HTTP routes are not installed. Monqey uses its trusted desktop IPC and native editor
+instead. Microphone permission is restricted to audio from the desktop main frame.
+This first version is desktop-only and does not add read-aloud or a live voice call.
+
+Checks: `npm run test:speech`, synthetic Dutch/English audio through the real local
+engine, and a hidden Electron window with fake-microphone audio through the actual
+DSH composer. Physical microphone quality still requires a user test.

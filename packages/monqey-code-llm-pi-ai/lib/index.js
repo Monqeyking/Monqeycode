@@ -2436,6 +2436,7 @@ var PiAiAdapter = class extends LlmAdapter {
 		cache.published = found;
 	}
 	modelCatalogStatus(provider) {
+		if (provider === QODER_PROVIDER_ID && qoderLoginFailure) return { state: `login-failed: ${qoderLoginFailure.message}`, lastSuccess: null };
 		const snapshot = this.current();
 		const status = snapshot.catalogs.get(provider)?.status() ?? snapshot.catalogStatus.get(provider) ?? { state: "pending", lastSuccess: null };
 		return status.state === "unavailable" && snapshot.models.getModels(provider).length ? { ...status, state: "cached" } : status;
@@ -3284,6 +3285,19 @@ function restate(prompt) {
 		};
 	}
 }
+/** The last Qoder sign-in failure, shown on the Models page until a sign-in succeeds. */
+let qoderLoginFailure;
+/** Drop links, terminal colour codes and line breaks so CLI output reads as one safe line. */
+function qoderScrub(text) {
+	return String(text)
+		.replace(/https?:\/\/\S+/g, "")
+		.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+function qoderFailureReason(error) {
+	return (qoderScrub(error instanceof Error ? error.message : error ?? "") || "unknown error").slice(0, 300);
+}
 const QODER_LOGIN_URL_PATTERN = /https:\/\/qoder\.com\/device\/selectAccounts\?[^\s"'<>]+/i;
 function launchQoderLogin(signal, onUrl) {
 	const executable = qoderBundledCliPath();
@@ -3325,7 +3339,10 @@ function launchQoderLogin(signal, onUrl) {
 		child.once("error", (error) => finish(error));
 		child.once("exit", (code, exitSignal) => {
 			if (code === 0) finish();
-			else finish(new Error(`Qoder login exited with ${exitSignal ? `signal ${exitSignal}` : `code ${code ?? "unknown"}`}.`));
+			else {
+				const tail = qoderScrub(output).slice(-160);
+				finish(new Error(`Qoder login exited with ${exitSignal ? `signal ${exitSignal}` : `code ${code ?? "unknown"}`}${tail ? `: ${tail}` : "."}`));
+			}
 		});
 		if (signal?.aborted) abort();
 		else signal?.addEventListener("abort", abort, { once: true });
@@ -3354,6 +3371,7 @@ function registerQoderFlow(ctx) {
 						});
 						await withQoderQuery(() => true);
 					} catch (loginError) {
+						qoderLoginFailure = { message: qoderFailureReason(loginError ?? firstError), at: Date.now() };
 						session.notify({
 							message: loginUrl === void 0
 								? "Qoder login did not complete. Please try Connect Qoder again."
@@ -3362,12 +3380,14 @@ function registerQoderFlow(ctx) {
 						throw loginError ?? firstError;
 					}
 				} else {
+					qoderLoginFailure = { message: qoderFailureReason(firstError), at: Date.now() };
 					session.notify({
 						message: "This development build does not contain the bundled Qoder login helper yet. Build Monqey Agent with the Qoder runtime package, or sign in through QoderCLI and press Connect Qoder again."
 					});
 					throw firstError;
 				}
 			}
+			qoderLoginFailure = void 0;
 			await writableStore(ctx).modifyRecord(recordKeyFor(QODER_PROVIDER_ID), async () => ({
 				kind: "grant",
 				payload: { type: "qodercli" }
