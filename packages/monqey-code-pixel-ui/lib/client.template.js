@@ -135,12 +135,33 @@ html body button[aria-label="Open remaining Codex usage"], html body button[aria
       });
     }
 
+    // Idle: the mascot falls asleep after IDLE_MS without pointer or keyboard activity.
+    const IDLE_MS = 5 * 60 * 1000;
+    function useIdle() {
+      const [idle, setIdle] = react.useState(false);
+      react.useEffect(() => {
+        let timer;
+        const wake = () => {
+          setIdle(false);
+          clearTimeout(timer);
+          timer = setTimeout(() => setIdle(true), IDLE_MS);
+        };
+        const events = ["pointerdown", "pointermove", "keydown", "wheel", "focus"];
+        events.forEach((name) => window.addEventListener(name, wake, { passive: true }));
+        wake();
+        return () => { clearTimeout(timer); events.forEach((name) => window.removeEventListener(name, wake)); };
+      }, []);
+      return idle;
+    }
+
     function BrandMark({ size }) {
-      return jsx(Sprite, { name: size && size <= 24 ? "mini" : "default", size: size || 24 });
+      const idle = useIdle();
+      return jsx(Sprite, { name: idle ? "sleep" : size && size <= 24 ? "mini" : "default", size: size || 24 });
     }
 
     function HeroMark() {
-      return jsx(Sprite, { name: "default", size: 96 });
+      const idle = useIdle();
+      return jsx(Sprite, { name: idle ? "sleep" : "default", size: 96 });
     }
 
     function TurnProcessRow({ node, turnProcess, t }) {
