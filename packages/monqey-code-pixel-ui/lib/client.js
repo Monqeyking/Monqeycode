@@ -105,6 +105,9 @@ html body button[aria-label="Open remaining Codex usage"], html body button[aria
 .monqey-pixel-meter-cells { display: inline-flex; gap: 1px; padding: 2px; border: 2px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-base); }
 .monqey-pixel-meter-cells i { display: block; width: 4px; height: 10px; background: var(--dsw-alias-border-l2); opacity: .18; }
 .monqey-pixel-meter-cells i[data-on] { opacity: 1; background: var(--monqey-pixel-meter-color); }
+html body button[aria-label="New agent"] { background: var(--dsw-alias-bg-layer-2) !important; font-weight: 600; box-shadow: 2px 2px 0 var(--dsw-alias-border-l1); }
+html body button[aria-label="New agent"]:hover { background: var(--dsw-alias-interactive-bg-hover) !important; }
+html body button[aria-label="New agent"]:active { box-shadow: none; transform: translate(2px, 2px); }
 .monqey-pixel-activity { display: flex; flex-direction: column; height: 100%; min-height: 0; font-size: 12px; }
 .monqey-pixel-activity-bar { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px; border-bottom: 2px solid var(--dsw-alias-border-l1); }
 .monqey-pixel-chip { padding: 2px 8px; cursor: pointer; color: var(--dsw-alias-label-secondary); background: transparent; border: 2px solid var(--dsw-alias-border-l1); font-size: 12px; }
