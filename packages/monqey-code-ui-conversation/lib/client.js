@@ -16224,6 +16224,7 @@ window.__ModuleLoader__.load({
 											children: (0, react_jsx_runtime.jsx)("button", {
 												type: "button",
 												className: InputBar_module_css_default.primary,
+												"data-monqey-send": primaryStops ? void 0 : "1",
 												"aria-label": primaryLabel,
 												disabled: primaryDisabled,
 												onMouseDown: keepFocus,

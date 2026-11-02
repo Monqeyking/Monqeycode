@@ -802,6 +802,7 @@ window.__ModuleLoader__.load({
       const [adding, setAdding] = react.useState(false);
       const [draft, setDraft] = react.useState("");
       const ready = typeof props.sessionId === "string" && typeof props.insert === "function";
+      react.useEffect(() => { consumePendingRun(props.sessionId, props.insert); }, [props.sessionId]);
       const use = text => { if (ready) props.insert(props.sessionId, text); };
       const savePins = next => { setPins(next); writeHomePins(next); };
       const add = () => {
@@ -867,6 +868,220 @@ window.__ModuleLoader__.load({
 .monqey-home-remove { position: absolute; top: 6px; right: 8px; border: 0; background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; font-size: 16px; line-height: 1; opacity: 0; }
 .monqey-home-card:hover .monqey-home-remove { opacity: 1; }
 `;
+
+
+    /* Automations: saved prompts that run on a schedule while Monqey Agent is open, or on demand. */
+    const AUTOMATIONS_KEY = "monqey-automations";
+    const CATCH_UP_MS = 12 * 3600 * 1000;
+    const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    let pendingRun = null;
+    const automationListeners = new Set();
+    function readAutomations() {
+      try {
+        const list = JSON.parse(window.localStorage.getItem(AUTOMATIONS_KEY) || "[]");
+        return Array.isArray(list) ? list.filter(item => item && typeof item.id === "string" && typeof item.prompt === "string") : [];
+      } catch { return []; }
+    }
+    function writeAutomations(list) {
+      try { window.localStorage.setItem(AUTOMATIONS_KEY, JSON.stringify(list)); } catch {}
+      for (const listener of automationListeners) listener();
+    }
+    function parseClock(text) {
+      const match = /^(\d{1,2}):(\d{2})$/.exec(String(text || ""));
+      if (!match) return { hours: 9, minutes: 0 };
+      return { hours: Math.min(23, Number(match[1])), minutes: Math.min(59, Number(match[2])) };
+    }
+    /** The latest scheduled moment at or before now, or null for manual and interval schedules. */
+    function lastOccurrence(automation, now) {
+      const schedule = automation.schedule || { kind: "manual" };
+      if (schedule.kind !== "daily" && schedule.kind !== "weekly") return null;
+      const { hours, minutes } = parseClock(schedule.time);
+      const days = schedule.kind === "weekly" && Array.isArray(schedule.days) && schedule.days.length ? schedule.days : [0, 1, 2, 3, 4, 5, 6];
+      for (let back = 0; back <= 7; back++) {
+        const day = new Date(now);
+        day.setDate(day.getDate() - back);
+        day.setHours(hours, minutes, 0, 0);
+        if (day.getTime() <= now && days.includes(day.getDay())) return day.getTime();
+      }
+      return null;
+    }
+    /** Whether an enabled automation should start now: a missed run is caught up once, within 12 hours. */
+    function automationDue(automation, now) {
+      if (!automation.enabled) return false;
+      const schedule = automation.schedule || { kind: "manual" };
+      const last = Number.isFinite(automation.lastRun) ? automation.lastRun : automation.createdAt || 0;
+      if (schedule.kind === "interval") return now - last >= Math.max(1, Number(schedule.minutes) || 60) * 60000;
+      const occurrence = lastOccurrence(automation, now);
+      return occurrence !== null && occurrence > last && now - occurrence < CATCH_UP_MS;
+    }
+    function nextOccurrence(automation, now) {
+      const schedule = automation.schedule || { kind: "manual" };
+      if (schedule.kind === "interval") {
+        const last = Number.isFinite(automation.lastRun) ? automation.lastRun : automation.createdAt || now;
+        return last + Math.max(1, Number(schedule.minutes) || 60) * 60000;
+      }
+      if (schedule.kind !== "daily" && schedule.kind !== "weekly") return null;
+      const { hours, minutes } = parseClock(schedule.time);
+      const days = schedule.kind === "weekly" && Array.isArray(schedule.days) && schedule.days.length ? schedule.days : [0, 1, 2, 3, 4, 5, 6];
+      for (let ahead = 0; ahead <= 7; ahead++) {
+        const day = new Date(now);
+        day.setDate(day.getDate() + ahead);
+        day.setHours(hours, minutes, 0, 0);
+        if (day.getTime() > now && days.includes(day.getDay())) return day.getTime();
+      }
+      return null;
+    }
+    function describeSchedule(schedule) {
+      const value = schedule || { kind: "manual" };
+      if (value.kind === "interval") return "Every " + (Number(value.minutes) || 60) + " min";
+      if (value.kind === "daily") return "Daily at " + (value.time || "09:00");
+      if (value.kind === "weekly") return (value.days || []).map(day => DAY_NAMES[day]).join(", ") + " at " + (value.time || "09:00");
+      return "Manual only";
+    }
+    function describeWhen(timestamp) {
+      return timestamp ? new Date(timestamp).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "\u2013";
+    }
+
+    function AutomationIcon(props) {
+      return jsx("svg", { width: props.size || 16, height: props.size || 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true,
+        children: [jsx("circle", { cx: 12, cy: 12, r: 8.5, key: "c" }), jsx("path", { d: "M12 7.5V12l3 2", key: "p" })] });
+    }
+
+    function AutomationForm(props) {
+      const initial = props.initial;
+      const [name, setName] = react.useState(initial ? initial.name : "");
+      const [prompt, setPrompt] = react.useState(initial ? initial.prompt : "");
+      const [workspaceId, setWorkspaceId] = react.useState(initial ? initial.workspaceId : (props.workspaces[0] ? props.workspaces[0].workspaceId : ""));
+      const [kind, setKind] = react.useState(initial && initial.schedule ? initial.schedule.kind : "manual");
+      const [time, setTime] = react.useState(initial && initial.schedule && initial.schedule.time ? initial.schedule.time : "09:00");
+      const [minutes, setMinutes] = react.useState(initial && initial.schedule && initial.schedule.minutes ? initial.schedule.minutes : 60);
+      const [days, setDays] = react.useState(initial && initial.schedule && initial.schedule.days ? initial.schedule.days : [1, 2, 3, 4, 5]);
+      const valid = prompt.trim().length > 0 && workspaceId !== "" && (kind !== "weekly" || days.length > 0);
+      const submit = event => {
+        event.preventDefault();
+        if (!valid) return;
+        const schedule = kind === "interval" ? { kind, minutes: Math.max(1, Number(minutes) || 60) } : kind === "daily" ? { kind, time } : kind === "weekly" ? { kind, time, days } : { kind };
+        props.onSave({ name: name.trim() || prompt.trim().slice(0, 40), prompt: prompt.trim(), workspaceId, schedule });
+      };
+      const toggleDay = day => setDays(current => current.includes(day) ? current.filter(item => item !== day) : [...current, day].sort());
+      return jsx("form", { className: "monqey-auto-form", onSubmit: submit, children: [
+        jsx("input", { key: "n", value: name, placeholder: "Name (optional)", maxLength: 80, onChange: event => setName(event.target.value) }),
+        jsx("textarea", { key: "p", value: prompt, placeholder: "What should the agent do?", rows: 4, onChange: event => setPrompt(event.target.value) }),
+        jsx("div", { key: "r", className: "monqey-auto-row", children: [
+          jsx("select", { key: "w", value: workspaceId, onChange: event => setWorkspaceId(event.target.value), children: props.workspaces.length === 0
+            ? [jsx("option", { value: "", key: "none", children: "No workspace yet" })]
+            : props.workspaces.map(item => jsx("option", { value: item.workspaceId, key: item.workspaceId, children: item.title })) }),
+          jsx("select", { key: "k", value: kind, onChange: event => setKind(event.target.value), children: [
+            jsx("option", { value: "manual", key: "m", children: "Manual only" }),
+            jsx("option", { value: "interval", key: "i", children: "Every N minutes" }),
+            jsx("option", { value: "daily", key: "d", children: "Daily" }),
+            jsx("option", { value: "weekly", key: "w", children: "Weekly" })
+          ] }),
+          kind === "interval" ? jsx("input", { key: "mins", type: "number", min: 1, value: minutes, onChange: event => setMinutes(event.target.value), style: { width: 80 } }) : null,
+          kind === "daily" || kind === "weekly" ? jsx("input", { key: "t", type: "time", value: time, onChange: event => setTime(event.target.value || "09:00") }) : null
+        ].filter(Boolean) }),
+        kind === "weekly" ? jsx("div", { key: "d", className: "monqey-auto-row", children: DAY_NAMES.map((label, day) => jsx("button", { key: day, type: "button", className: "monqey-auto-day", "aria-pressed": days.includes(day), onClick: () => toggleDay(day), children: label })) }) : null,
+        jsx("div", { key: "a", className: "monqey-auto-row", children: [
+          jsx("button", { key: "s", type: "submit", className: "monqey-auto-primary", disabled: !valid, children: initial ? "Save" : "Create" }),
+          jsx("button", { key: "c", type: "button", className: "monqey-auto-ghost", onClick: props.onCancel, children: "Cancel" })
+        ] })
+      ].filter(Boolean) });
+    }
+
+    function AutomationsPage(props) {
+      const workspaceState = props.useWorkspaces(state => state);
+      const workspaces = workspaceState && Array.isArray(workspaceState.items) ? workspaceState.items : [];
+      const [items, setItems] = react.useState(readAutomations);
+      const [editing, setEditing] = react.useState(null);
+      const [now, setNow] = react.useState(Date.now());
+      react.useEffect(() => {
+        const sync = () => setItems(readAutomations());
+        automationListeners.add(sync);
+        const timer = setInterval(() => setNow(Date.now()), 30000);
+        return () => { automationListeners.delete(sync); clearInterval(timer); };
+      }, []);
+      const update = (id, patchValues) => writeAutomations(readAutomations().map(item => item.id === id ? { ...item, ...patchValues } : item));
+      const save = values => {
+        if (editing && editing !== "new") update(editing, values);
+        else writeAutomations([...readAutomations(), { id: "a-" + Date.now(), createdAt: Date.now(), enabled: values.schedule.kind !== "manual", ...values }]);
+        setEditing(null);
+      };
+      const titleOf = id => { const found = workspaces.find(item => item.workspaceId === id); return found ? found.title : "Workspace not found"; };
+      const editingItem = editing && editing !== "new" ? items.find(item => item.id === editing) : null;
+      return jsx("div", { className: "monqey-auto", children: [
+        jsx("header", { key: "h", className: "monqey-auto-head", children: [
+          jsx("div", { key: "t", children: [
+            jsx("h1", { key: "1", children: "Automations" }),
+            jsx("p", { key: "2", children: "Saved prompts that start an agent for you. Scheduled runs only happen while Monqey Agent is open; a run missed in the last 12 hours starts when you reopen it." })
+          ] }),
+          jsx("button", { key: "b", type: "button", className: "monqey-auto-primary", onClick: () => setEditing("new"), children: "+ New automation" })
+        ] }),
+        editing ? jsx(AutomationForm, { key: "f" + editing, initial: editingItem, workspaces, onSave: save, onCancel: () => setEditing(null) }) : null,
+        items.length === 0 && !editing ? jsx("div", { key: "e", className: "monqey-auto-empty", children: "No automations yet. Create one to run a prompt daily, weekly or on demand." }) : null,
+        jsx("div", { key: "l", className: "monqey-auto-list", children: items.map(item => {
+          const scheduled = item.schedule && item.schedule.kind !== "manual";
+          const next = item.enabled && scheduled ? nextOccurrence(item, now) : null;
+          return jsx("div", { key: item.id, className: "monqey-auto-card", children: [
+            jsx("div", { key: "m", className: "monqey-auto-main", children: [
+              jsx("strong", { key: "n", children: item.name }),
+              jsx("span", { key: "s", className: "monqey-auto-meta", children: describeSchedule(item.schedule) + " \u00B7 " + titleOf(item.workspaceId) }),
+              jsx("span", { key: "x", className: "monqey-auto-meta", children: "Last run: " + describeWhen(item.lastRun) + (next ? " \u00B7 Next: " + describeWhen(next) : "") }),
+              jsx("span", { key: "p", className: "monqey-auto-prompt", children: item.prompt })
+            ] }),
+            jsx("div", { key: "a", className: "monqey-auto-actions", children: [
+              scheduled ? jsx("label", { key: "tg", className: "monqey-auto-toggle", children: [
+                jsx("input", { key: "i", type: "checkbox", checked: !!item.enabled, onChange: event => update(item.id, { enabled: event.target.checked, ...(event.target.checked ? { lastRun: Date.now() } : {}) }) }),
+                jsx("span", { key: "l", children: item.enabled ? "On" : "Off" })
+              ] }) : null,
+              jsx("button", { key: "r", type: "button", className: "monqey-auto-primary", onClick: () => props.run(item), children: "Run now" }),
+              jsx("button", { key: "e", type: "button", className: "monqey-auto-ghost", onClick: () => setEditing(item.id), children: "Edit" }),
+              jsx("button", { key: "d", type: "button", className: "monqey-auto-ghost", onClick: () => writeAutomations(readAutomations().filter(other => other.id !== item.id)), children: "Delete" })
+            ].filter(Boolean) })
+          ] });
+        }) })
+      ] });
+    }
+
+    const AUTOMATIONS_CSS = String.raw`
+.monqey-auto { height: 100%; overflow: auto; padding: 28px; box-sizing: border-box; color: var(--dsw-alias-label-primary); font-size: 14px; display: flex; flex-direction: column; gap: 16px; }
+.monqey-auto * { box-sizing: border-box; }
+.monqey-auto h1 { font-size: 24px; letter-spacing: -.6px; margin: 0 0 6px; }
+.monqey-auto p { margin: 0; line-height: 1.5; font-size: 12px; color: var(--dsw-alias-label-secondary); max-width: 560px; }
+.monqey-auto-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.monqey-auto button, .monqey-auto input, .monqey-auto textarea, .monqey-auto select { font: inherit; color: inherit; }
+.monqey-auto-primary { border: 0; border-radius: 999px; padding: 6px 14px; cursor: pointer; background: var(--dsw-alias-brand-primary); color: #fff; font-size: 13px; white-space: nowrap; }
+.monqey-auto-primary:disabled { opacity: .45; cursor: default; }
+.monqey-auto-ghost { border: 1px solid var(--dsw-alias-border-l2); border-radius: 999px; padding: 5px 12px; cursor: pointer; background: transparent; font-size: 13px; }
+.monqey-auto-ghost:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.monqey-auto-empty { padding: 28px; text-align: center; color: var(--dsw-alias-label-secondary); border: 1px dashed var(--dsw-alias-border-l3); border-radius: 14px; }
+.monqey-auto-list { display: flex; flex-direction: column; gap: 10px; }
+.monqey-auto-card { display: flex; justify-content: space-between; gap: 16px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-1); }
+.monqey-auto-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.monqey-auto-meta { font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.monqey-auto-prompt { font-size: 12px; color: var(--dsw-alias-label-tertiary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 4px; }
+.monqey-auto-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.monqey-auto-toggle { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.monqey-auto-form { display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: 14px; border: 1px solid var(--dsw-alias-border-l3); background: var(--dsw-alias-bg-layer-1); max-width: 640px; }
+.monqey-auto-form input, .monqey-auto-form textarea, .monqey-auto-form select { padding: 8px 10px; border-radius: 10px; border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-specific-input-major, transparent); }
+.monqey-auto-form textarea { resize: vertical; }
+.monqey-auto-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.monqey-auto-day { border: 1px solid var(--dsw-alias-border-l2); border-radius: 999px; padding: 4px 10px; cursor: pointer; background: transparent; font-size: 12px; }
+.monqey-auto-day[aria-pressed="true"] { background: var(--dsw-alias-brand-primary); border-color: var(--dsw-alias-brand-primary); color: #fff; }
+`;
+
+    /* Fill the composer of a freshly started session with the prepared prompt, then send it. */
+    function consumePendingRun(sessionId, insert) {
+      if (!pendingRun || typeof sessionId !== "string" || typeof insert !== "function") return;
+      const run = pendingRun;
+      pendingRun = null;
+      setTimeout(() => {
+        if (!insert(sessionId, run.prompt)) return;
+        setTimeout(() => {
+          const send = document.querySelector("button[data-monqey-send]:not(:disabled)");
+          if (send) send.click();
+        }, 250);
+      }, 150);
+    }
 
     const inject = ["slots", "remote", "remote.session", "modelDirectories"];
 
@@ -945,6 +1160,33 @@ ${LIGHT} .monqey-mark-hero .monqey-mark-color { filter: drop-shadow(0 6px 16px r
           })
         )
       );
+      ctx.inject(["layout", "uiWorkspace"], (scope) => {
+        const run = (automation) => {
+          pendingRun = { prompt: automation.prompt };
+          const stamp = readAutomations().map(item => item.id === automation.id ? { ...item, lastRun: Date.now() } : item);
+          writeAutomations(stamp);
+          scope.layout.selectPanel("agents");
+          scope.uiWorkspace.startSession(automation.workspaceId || undefined);
+        };
+        scope.effect(() => {
+          const style = document.createElement("style");
+          style.setAttribute("data-plugin", "monqey-code-brand-automations");
+          style.textContent = AUTOMATIONS_CSS;
+          document.head.appendChild(style);
+          return () => style.remove();
+        }, "monqey-code-brand: automations styles");
+        scope.effect(() => {
+          const tick = () => {
+            const due = readAutomations().find(item => automationDue(item, Date.now()));
+            if (due) run(due);
+          };
+          const first = setTimeout(tick, 8000);
+          const timer = setInterval(tick, 30000);
+          return () => { clearTimeout(first); clearInterval(timer); };
+        }, "monqey-code-brand: automations scheduler");
+        scope.slots.inject("main", () => scope.slots.register({ name: "main", key: "automations", inject: () => ({ run }) }, AutomationsPage));
+        scope.slots.inject("sidebar.panellist", () => scope.slots.register({ name: "sidebar.panellist", id: "automations", order: 20, label: () => "Automations" }, props => jsx(AutomationIcon, props)));
+      });
       ctx.inject(["sessions"], (scope) => {
         scope.effect(() => {
           const style = document.createElement("style");
@@ -977,6 +1219,8 @@ ${LIGHT} .monqey-mark-hero .monqey-mark-color { filter: drop-shadow(0 6px 16px r
     }
 
     exports.apply = apply;
+    exports.automationDue = automationDue;
+    exports.nextOccurrence = nextOccurrence;
     exports.inject = inject;
     return module.exports;
   }

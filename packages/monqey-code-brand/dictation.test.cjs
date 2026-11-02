@@ -25,7 +25,7 @@ test('dictation inserts through the native session editor, preserves typed text,
   const browser = { monqeyDesktop: { dictation: speech }, __ModuleLoader__: { load: item => { plugin = item.factory(name => name === 'react' ? react : { jsx }); } } };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'lib/client.js'), 'utf8'), { window: browser, console, URL, Blob, FileReader: Reader, MediaRecorder: Recorder, navigator: { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop: () => { stopCount++; } }] }) } }, setTimeout, clearTimeout });
   const session = {};
-  const scope = { sessions: { scope: id => { assert.equal(id, 'session-one'); return session; } }, bail: (owner, event, request) => { assert.equal(owner, session); assert.equal(event, 'slash/input-insert-text'); insertions.push(request); return true; }, slots: { inject: (_name, callback) => callback(), register: (options, view) => { slot = options; component = view; } } };
+  const scope = { effect: () => {}, sessions: { scope: id => { assert.equal(id, 'session-one'); return session; } }, bail: (owner, event, request) => { assert.equal(owner, session); assert.equal(event, 'slash/input-insert-text'); insertions.push(request); return true; }, slots: { inject: (_name, callback) => callback(), register: (options, view) => { if (options.name !== 'conversation.input.beforeSubmit') return; slot = options; component = view; } } };
   plugin.apply({ inject: (deps, callback) => { if (deps.includes('sessions')) callback(scope); }, slots: { inject() {} } });
   assert.equal(slot.name, 'conversation.input.beforeSubmit');
   const props = { ...slot.inject('session-one'), useInput: selector => selector(input) };
