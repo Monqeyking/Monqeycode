@@ -1,6 +1,6 @@
 {
   "name": "monqey-code-desktop",
-  "version": "0.0.18",
+  "version": "0.0.19",
   "private": true,
   "description": "Minimal Electron wrapper for the existing DSH web profile",
   "main": "main.js",
