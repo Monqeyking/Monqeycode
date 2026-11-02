@@ -37,7 +37,7 @@ html body .monqey-pixel-round, html body .monqey-pixel-round * { border-radius: 
 html body * { font-family: var(--monqey-pixel-font); }
 html body code, html body pre, html body kbd, html body samp, html body pre *, html body code * { font-family: 'Cascadia Mono','Consolas',ui-monospace,monospace; }
 html body textarea:focus, html body input:focus { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 0; }
-html body [class*="card" i] { border: var(--monqey-pixel-border) solid var(--dsw-alias-border-l1) !important; box-shadow: 3px 3px 0 var(--monqey-pixel-shadow); }
+html body :is([class*="_card_"], [class*="_addCard_"], [class*="_fileCard_"], [class*="_instructionsCard_"], [class*="_ioCard_"], [class*="_rowCard_"], [class*="_setupCard_"], [class*="_dockHintCard_"]) { border: var(--monqey-pixel-border) solid var(--dsw-alias-border-l1) !important; box-shadow: 3px 3px 0 var(--monqey-pixel-shadow); }
 ${LIGHT} {
   --dsw-alias-bg-base: #fff4dc; --dsw-alias-bg-layer-1: #f7e6c0; --dsw-alias-bg-layer-2: #f1d9a6;
   --dsw-alias-bg-overlay: #fffaf0; --dsw-alias-border-l1: #2b2118; --dsw-alias-border-l2: #2b2118;
@@ -47,6 +47,12 @@ ${LIGHT} {
   --monqey-pixel-shadow: #2b2118;
   --dsw-specific-bubble: #f8d98d; --dsw-alias-markdown-code-block: #fbf0d3;
   --dsw-alias-button-primary-fill: #c8782a; --dsw-alias-label-primary-foreground: #fffaf0;
+  --dsw-alias-bg-layer-3: #fff4dc; --dsw-alias-bg-layer-4: #fff4dc; --dsw-specific-selector: #f7e6c0; --dsw-alias-bg-multi-select: #f7e6c0;
+  --dsw-alias-button-elevated-fill: #fff4dc; --dsw-alias-button-floating-fill: #fff4dc; --dsw-alias-button-floating-hover: #f8d98d;
+  --dsw-alias-interactive-bg-hover-solid: #f8d98d; --dsw-specific-sidebar-nav-item-active: #e8c98a; --dsw-specific-sidebar-nav-item-hover: #f8d98d;
+  --dsw-alias-markdown-code-block-banner: #f1d9a6; --dsw-alias-button-ghost-active-fill: #e8c98a; --dsw-alias-button-ghost-active-hover: #f1d9a6;
+  --dsw-static-neutral-bluish-00: #fff4dc; --dsw-static-neutral-bluish-50: #fbf0d3; --dsw-static-neutral-bluish-60: #f7e6c0; --dsw-static-neutral-bluish-75: #f1d9a6;
+  --dsw-static-neutral-bluish-100: #e8c98a; --dsw-static-neutral-bluish-150: #e3c383; --dsw-static-neutral-bluish-200: #d9b97a;
 }
 ${DARK} {
   --dsw-alias-bg-base: #17120e; --dsw-alias-bg-layer-1: #211a14; --dsw-alias-bg-layer-2: #2b2219;
@@ -57,6 +63,10 @@ ${DARK} {
   --monqey-pixel-shadow: #000000;
   --dsw-specific-bubble: #3a2c1c; --dsw-alias-markdown-code-block: #120e0a;
   --dsw-alias-button-primary-fill: #f0a43c; --dsw-alias-label-primary-foreground: #17120e;
+  --dsw-alias-bg-layer-3: #2b2219; --dsw-alias-bg-layer-4: #33281c; --dsw-specific-selector: #2b2219; --dsw-alias-bg-multi-select: #2b2219;
+  --dsw-alias-button-elevated-fill: #2b2219; --dsw-alias-button-floating-fill: #2b2219; --dsw-alias-button-floating-hover: #3a2c1c;
+  --dsw-alias-interactive-bg-hover-solid: #3a2c1c; --dsw-specific-sidebar-nav-item-active: #4a3820; --dsw-specific-sidebar-nav-item-hover: #3a2c1c;
+  --dsw-alias-markdown-code-block-banner: #2b2219; --dsw-alias-button-ghost-active-fill: #4a3820; --dsw-alias-button-ghost-active-hover: #3a2c1c;
 }
 html body { font-family: var(--monqey-pixel-font); -webkit-font-smoothing: none; font-smooth: never; }
 html body button, html body input, html body textarea, html body select,
@@ -108,6 +118,11 @@ html body button[aria-label="Open remaining Codex usage"], html body button[aria
 html body button[aria-label="New agent"] { background: var(--dsw-alias-bg-layer-2) !important; font-weight: 600; box-shadow: 2px 2px 0 var(--dsw-alias-border-l1); }
 html body button[aria-label="New agent"]:hover { background: var(--dsw-alias-interactive-bg-hover) !important; }
 html body button[aria-label="New agent"]:active { box-shadow: none; transform: translate(2px, 2px); }
+html body div:has(> button[aria-pressed]:nth-child(3)) > button[aria-pressed] { background: var(--dsw-alias-bg-base) !important; border: 2px solid var(--dsw-alias-border-l1) !important; color: var(--dsw-alias-label-secondary); }
+html body div:has(> button[aria-pressed]:nth-child(3)) > button[aria-pressed="true"] { background: var(--dsw-alias-bg-layer-2) !important; color: var(--dsw-alias-label-primary); font-weight: 600; box-shadow: 2px 2px 0 var(--dsw-alias-border-l1); }
+html body button[style*="rgb(105, 87, 255)"] { background: var(--dsw-alias-brand-primary) !important; border: 2px solid var(--dsw-alias-border-l1) !important; color: var(--dsw-alias-label-primary-foreground) !important; box-shadow: 2px 2px 0 var(--dsw-alias-border-l1); }
+html body input[type="checkbox"], html body input[type="radio"] { accent-color: var(--dsw-alias-brand-primary); }
+html body [role="dialog"] select, html body [role="dialog"] input:not([type="checkbox"]):not([type="radio"]), html body [role="dialog"] textarea { background: var(--dsw-specific-input-major); color: var(--dsw-alias-label-primary); border: 2px solid var(--dsw-alias-border-l1); }
 .monqey-pixel-activity { display: flex; flex-direction: column; height: 100%; min-height: 0; font-size: 12px; }
 .monqey-pixel-activity-bar { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px; border-bottom: 2px solid var(--dsw-alias-border-l1); }
 .monqey-pixel-chip { padding: 2px 8px; cursor: pointer; color: var(--dsw-alias-label-secondary); background: transparent; border: 2px solid var(--dsw-alias-border-l1); font-size: 12px; }
