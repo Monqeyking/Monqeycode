@@ -120,6 +120,7 @@ html body button[aria-label="New agent"]:hover { background: var(--dsw-alias-int
 html body button[aria-label="New agent"]:active { box-shadow: none; transform: translate(2px, 2px); }
 html body div:has(> button[aria-pressed]:nth-child(3)) > button[aria-pressed] { background: var(--dsw-alias-bg-base) !important; border: 2px solid var(--dsw-alias-border-l1) !important; color: var(--dsw-alias-label-secondary); }
 html body div:has(> button[aria-pressed]:nth-child(3)) > button[aria-pressed="true"] { background: var(--dsw-alias-bg-layer-2) !important; color: var(--dsw-alias-label-primary); font-weight: 600; box-shadow: 2px 2px 0 var(--dsw-alias-border-l1); }
+${LIGHT} [role="dialog"] { --dsw-specific-input-major: #fbe8c0; }
 html body button[style*="rgb(105, 87, 255)"] { background: var(--dsw-alias-brand-primary) !important; border: 2px solid var(--dsw-alias-border-l1) !important; color: var(--dsw-alias-label-primary-foreground) !important; box-shadow: 2px 2px 0 var(--dsw-alias-border-l1); }
 html body input[type="checkbox"], html body input[type="radio"] { accent-color: var(--dsw-alias-brand-primary); }
 html body [role="dialog"] select, html body [role="dialog"] input:not([type="checkbox"]):not([type="radio"]), html body [role="dialog"] textarea { background: var(--dsw-specific-input-major); color: var(--dsw-alias-label-primary); border: 2px solid var(--dsw-alias-border-l1); }
