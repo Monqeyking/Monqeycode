@@ -111,8 +111,6 @@ if (!hasSingleInstanceLock) {
   app.on('second-instance', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
-    dictation = require('./dictation.cjs').installDictation({ win: mainWindow, ipcMain, home: appPaths.home, origin: url,
-      workerFile: app.isPackaged ? path.join(process.resourcesPath, 'dictation-worker.py') : path.join(__dirname, 'dictation-worker.py') });
     mainWindow.show();
     mainWindow.focus();
   });
@@ -264,6 +262,8 @@ function showHarness(url) {
     installDesktopChrome({ app, win: mainWindow, ipcMain, Menu, dialog, origin: url, quit: quitFromTray,
       iconPath: applicationIcon(), executable: process.env.PORTABLE_EXECUTABLE_FILE || process.execPath
     });
+    dictation = require('./dictation.cjs').installDictation({ win: mainWindow, ipcMain, home: appPaths.home, origin: url,
+      workerFile: app.isPackaged ? path.join(process.resourcesPath, 'dictation-worker.py') : path.join(__dirname, 'dictation-worker.py') });
     installBrowserLinks(mainWindow, link => require('electron').shell.openExternal(link), error => writeFailureLog(`Could not open the browser extension store: ${error.message}`));
     mainWindow.show();
   }
