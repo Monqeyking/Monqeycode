@@ -1,6 +1,7 @@
 import { launchEnvironmentOf } from "@deepseek-ai/dsh-launch-environment";
 import { LiveModelCatalog } from "@deepseek-ai/dsh-llm/live-model-catalog";
 import { qoderReasoning, qoderModelPolicy } from "./qoder-reasoning.js";
+import { qoderToolCallText, qoderToolsPrompt, qoderSafeLength, qoderParseToolCalls } from "./qoder-tools.js";
 import { CONTEXT_WINDOW_EXCEEDED_CODE, EMPTY_RESPONSE_CODE, INVALID_CREDENTIAL_CODE, LlmAdapter, LlmError, QUOTA_EXCEEDED_CODE, ReasoningEffortId, RetryPolicySchema, assertUsableApiKey, attributionHeaders, contentHasImage, isContextWindowExceededError, isQuotaExceededError, normalizeApiKey, offloadRequestImagesWithPolicy, offloadedImageText, requestImageHandleText, resolveImageAttachmentAccess, resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
 import { deepEqualJson } from "@deepseek-ai/dsh-util-values";
 import { createModels, createProvider, getSupportedThinkingLevels, isContextOverflow } from "@earendil-works/pi-ai";
@@ -16,10 +17,10 @@ import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.l
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { access } from "node:fs/promises";
+import { access, appendFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 //#region lib/types/replay.js
 /**
 * Durable pi-ai replay metadata and assistant-history reconstruction.
@@ -957,10 +958,10 @@ function qoderPrompt(context) {
 	const lines = [];
 	if (typeof context.systemPrompt === "string" && context.systemPrompt.length > 0) lines.push("SYSTEM:\n" + context.systemPrompt);
 	for (const message of context.messages ?? []) {
-		const role = message.role === "toolResult" ? "TOOL RESULT" : String(message.role).toUpperCase();
+		const role = message.role === "toolResult" ? `TOOL RESULT${typeof message.toolName === "string" ? ` (${message.toolName})` : ""}` : String(message.role).toUpperCase();
 		const content = Array.isArray(message.content) ? message.content.map((block) => {
 			if (block.type === "text") return block.text;
-			if (block.type === "toolCall") return `[tool call ${block.name}] ${JSON.stringify(block.arguments)}`;
+			if (block.type === "toolCall") return qoderToolCallText(block.name, block.arguments);
 			if (block.type === "toolResult") return block.content?.map((item) => item.type === "text" ? item.text : "").join("") ?? "";
 			return "";
 		}).filter(Boolean).join("\n") : String(message.content ?? "");
@@ -969,9 +970,10 @@ function qoderPrompt(context) {
 	return [
 		"You are the selected Qoder model inside Monqey Agent.",
 		"Answer the latest user request directly. Do not edit files, run commands, or use Qoder's own tools; Monqey Agent owns those actions.",
+		qoderToolsPrompt(context.tools),
 		"The following is the conversation context:",
 		lines.join("\n\n")
-	].join("\n\n");
+	].filter((part) => part.length > 0).join("\n\n");
 }
 function qoderTextContent(content) {
 	if (typeof content === "string") return content;
@@ -993,11 +995,41 @@ async function* qoderStreamChunks(options, context, signal, reasoning) {
 	const abort = () => controller.abort(signal?.reason);
 	if (signal?.aborted) abort();
 	else signal?.addEventListener("abort", abort, { once: true });
-	let blockStarted = false;
+	let nextIndex = 0;
+	let reasoningIndex;
+	let reasoningOpen = false;
+	let textIndex;
 	let text = "";
+	let thinking = "";
+	let visible = "";
 	let finalUsage;
 	let result;
 	let query;
+	const toolNames = new Set((context.tools ?? []).map((tool) => tool.name));
+	const withTools = toolNames.size > 0;
+	// Names only, never prompt content: shows which tools Monqey handed this request.
+	appendFile(join(dirname(fileURLToPath(import.meta.url)), "../../../logs/qoder-bridge.log"), JSON.stringify({ at: new Date().toISOString(), model: options.model, reasoning: reasoning ?? null, tools: [...toolNames] }) + "\n").catch(() => {});
+	const closeReasoning = function* () {
+		if (!reasoningOpen) return;
+		reasoningOpen = false;
+		yield { type: "block-end", index: reasoningIndex, block: { type: "reasoning", text: thinking } };
+	};
+	const openReasoning = function* () {
+		if (reasoningIndex !== void 0) return;
+		reasoningIndex = nextIndex++;
+		reasoningOpen = true;
+		yield { type: "block-start", index: reasoningIndex, blockType: "reasoning" };
+	};
+	const emitText = function* (chunk) {
+		if (chunk.length === 0) return;
+		if (textIndex === void 0) {
+			yield* closeReasoning();
+			textIndex = nextIndex++;
+			yield { type: "block-start", index: textIndex, blockType: "text" };
+		}
+		visible += chunk;
+		yield { type: "text-delta", index: textIndex, text: chunk };
+	};
 	try {
 		const sdk = await loadQoderSdk();
 		query = sdk.query({
@@ -1020,19 +1052,30 @@ async function* qoderStreamChunks(options, context, signal, reasoning) {
 			if (message.type === "stream_event") {
 				const event = message.event;
 				const delta = event?.delta;
+				if (event?.type === "content_block_delta" && delta?.type === "thinking_delta" && typeof delta.thinking === "string") {
+					yield* openReasoning();
+					thinking += delta.thinking;
+					yield { type: "reasoning-delta", index: reasoningIndex, text: delta.thinking };
+				}
 				if (event?.type === "content_block_delta" && delta?.type === "text_delta" && typeof delta.text === "string") {
-					if (!blockStarted) {
-						blockStarted = true;
-						yield { type: "block-start", index: 0, blockType: "text" };
-					}
 					text += delta.text;
-					yield { type: "text-delta", index: 0, text: delta.text };
+					const safe = withTools ? qoderSafeLength(text) : text.length;
+					if (safe > visible.length) yield* emitText(text.slice(visible.length, safe));
 				}
 				continue;
 			}
 			if (message.type === "assistant") {
-				const assistantText = qoderTextContent(message.message?.content);
-				if (!blockStarted && assistantText.length > 0) text = assistantText;
+				const content = Array.isArray(message.message?.content) ? message.message.content : [];
+				const assistantText = qoderTextContent(content);
+				if (assistantText.length > 0) text = assistantText;
+				if (thinking.length === 0 && textIndex === void 0) {
+					const assistantThinking = content.filter((block) => block?.type === "thinking" && typeof block.thinking === "string").map((block) => block.thinking).join("");
+					if (assistantThinking.length > 0) {
+						yield* openReasoning();
+						thinking = assistantThinking;
+						yield { type: "reasoning-delta", index: reasoningIndex, text: assistantThinking };
+					}
+				}
 				if (message.message?.usage !== void 0) finalUsage = message.message.usage;
 				continue;
 			}
@@ -1041,13 +1084,21 @@ async function* qoderStreamChunks(options, context, signal, reasoning) {
 				finalUsage = message.usage ?? finalUsage;
 			}
 		}
-		if (!blockStarted && text.length === 0 && typeof result?.result === "string") text = result.result;
-		if (!blockStarted && text.length > 0) {
-			yield { type: "block-start", index: 0, blockType: "text" };
-			yield { type: "text-delta", index: 0, text };
-			blockStarted = true;
+		if (visible.length === 0 && text.length === 0 && typeof result?.result === "string") text = result.result;
+		const parsed = withTools ? qoderParseToolCalls(text, toolNames) : { text, calls: [] };
+		const rest = parsed.text.slice(visible.length);
+		if (rest.trim().length > 0 || textIndex !== void 0) yield* emitText(rest);
+		yield* closeReasoning();
+		if (textIndex !== void 0) yield { type: "block-end", index: textIndex, block: { type: "text", text: visible } };
+		const callStamp = Date.now().toString(36);
+		for (const [n, call] of parsed.calls.entries()) {
+			const index = nextIndex++;
+			const id = brandString(`qoder-call-${callStamp}-${n}`);
+			const argumentsJson = JSON.stringify(call.arguments);
+			yield { type: "block-start", index, blockType: "tool-call" };
+			yield { type: "tool-call-delta", index, id, name: call.name, argumentsDelta: argumentsJson };
+			yield { type: "block-end", index, block: { type: "tool-call", id, name: call.name, arguments: argumentsJson } };
 		}
-		if (blockStarted) yield { type: "block-end", index: 0, block: { type: "text", text } };
 		yield { type: "usage", usage: qoderUsage(finalUsage) };
 		if (result?.is_error === true) {
 			yield {
@@ -1059,7 +1110,7 @@ async function* qoderStreamChunks(options, context, signal, reasoning) {
 			};
 			return;
 		}
-		yield { type: "finish", reason: { kind: result?.stop_reason === "max_tokens" ? "max-tokens" : "stop" } };
+		yield { type: "finish", reason: { kind: parsed.calls.length > 0 ? "tool-calls" : result?.stop_reason === "max_tokens" ? "max-tokens" : "stop" } };
 	} finally {
 		signal?.removeEventListener("abort", abort);
 		controller.abort();
