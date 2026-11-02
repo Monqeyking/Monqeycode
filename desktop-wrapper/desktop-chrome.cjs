@@ -3,7 +3,7 @@ const { APP_ID } = require('./shortcuts.cjs');
 
 const windowChrome = process.platform === 'win32' ? {
   titleBarStyle: 'hidden',
-  titleBarOverlay: { color: '#111111', symbolColor: '#ededed', height: 36 }
+  titleBarOverlay: { color: '#17120e', symbolColor: '#f7e2c2', height: 36 }
 } : {};
 
 function installDesktopChrome({ app, win, ipcMain, Menu, dialog, origin, quit, iconPath, executable }) {
@@ -45,7 +45,7 @@ function installDesktopChrome({ app, win, ipcMain, Menu, dialog, origin, quit, i
     if (new URL(event.senderFrame.url).origin !== expectedOrigin) throw Error('Desktop window required.');
     if (command === 'info') return { computer: os.hostname(), platform: process.platform, version: app.getVersion() };
     if (command === 'theme' && typeof value === 'boolean') {
-      if (process.platform === 'win32') win.setTitleBarOverlay({ color: value ? '#111111' : '#ffffff', symbolColor: value ? '#ededed' : '#222222', height: 36 });
+      if (process.platform === 'win32') win.setTitleBarOverlay({ color: value ? '#17120e' : '#fff4dc', symbolColor: value ? '#f7e2c2' : '#2b2118', height: 36 });
       return;
     }
     if (command === 'menu' && value && ['File', 'Edit', 'View', 'Help'].includes(value.name) && Number.isFinite(value.x) && Number.isFinite(value.y)) {

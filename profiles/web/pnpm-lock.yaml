@@ -62,6 +62,9 @@ importers:
       monqey-code-notifications:
         specifier: link:../../packages/monqey-code-notifications
         version: link:../../packages/monqey-code-notifications
+      monqey-code-pixel-ui:
+        specifier: link:../../packages/monqey-code-pixel-ui
+        version: link:../../packages/monqey-code-pixel-ui
       monqey-code-workspace-tools:
         specifier: link:../../packages/monqey-code-workspace-tools
         version: link:../../packages/monqey-code-workspace-tools

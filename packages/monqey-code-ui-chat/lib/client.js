@@ -1187,6 +1187,7 @@ window.__ModuleLoader__.load({
 			return (0, react_jsx_runtime.jsxs)("div", {
 				className: MessageItem_module_css_default.turnErrorRow,
 				role: "status",
+				"data-monqey-state": "error",
 				children: [
 					(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, {
 						state: "error",
@@ -1214,6 +1215,7 @@ window.__ModuleLoader__.load({
 			return (0, react_jsx_runtime.jsxs)("div", {
 				className: MessageItem_module_css_default.turnErrorRow,
 				role: "status",
+				"data-monqey-state": "error",
 				children: [(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.StateDot, {
 					state: "warning",
 					className: MessageItem_module_css_default.turnErrorDot

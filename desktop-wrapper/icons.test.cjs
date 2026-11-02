@@ -5,7 +5,7 @@ const path = require('node:path');
 const { PNG } = require('pngjs');
 const { createHash } = require('node:crypto');
 
-test('Windows taskbar frames use 32-bit bitmap icons and preserve the original Monqey pixels', () => {
+test('Windows taskbar frames use 32-bit bitmap icons and preserve the pixel-monkey pixels', () => {
   const ico = fs.readFileSync(path.join(__dirname, 'assets/monqey.ico'));
   assert.equal(ico.readUInt16LE(2), 1);
   const sizes = [];
@@ -30,7 +30,7 @@ test('Windows taskbar frames use 32-bit bitmap icons and preserve the original M
         const from = 40 + ((height - 1 - y) * width + x) * 4, to = (y * width + x) * 4;
         actual[to] = frame[from + 2]; actual[to + 1] = frame[from + 1]; actual[to + 2] = frame[from]; actual[to + 3] = frame[from + 3];
       }
-      assert.equal(createHash('sha256').update(actual).digest('hex'), 'ff3dcd8e1ffd29ebc28f5850b351215fa7dbd9cc33df83820af21033fb0084d7', 'The original 32px Monqey mark must stay unchanged');
+      assert.equal(createHash('sha256').update(actual).digest('hex'), 'ec0b4f71dd7ec8be255601325fc2846e331713bd275df546ce88e53fd359a437', 'The 32px pixel-monkey mark must stay unchanged');
     }
   }
   assert.deepEqual(sizes, [16, 24, 32, 48, 64, 128, 256]);

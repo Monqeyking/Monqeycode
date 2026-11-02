@@ -31,7 +31,7 @@ test('desktop menus keep native editing/window actions and reject untrusted fram
   assert.equal(handler(event, 'info').version, '0.0.8');
   handler(event, 'menu', { name: 'File', x: 20.5, y: 36 }); assert.equal(popup.x, 21); assert.equal(popup.window, win);
   handler(event, 'theme', true);
-  if (process.platform === 'win32') { assert.equal(overlay.color, '#111111'); assert.equal(windowChrome.titleBarStyle, 'hidden'); }
+  if (process.platform === 'win32') { assert.equal(overlay.color, '#17120e'); assert.equal(windowChrome.titleBarStyle, 'hidden'); }
   assert.throws(() => handler({ ...event, sender: {} }, 'info'), /Desktop window/);
   assert.throws(() => handler({ ...event, senderFrame: { url: frame.url } }, 'info'), /Desktop window/);
   frame.url = 'https://example.com/'; assert.throws(() => handler(event, 'theme', false), /Desktop window/); frame.url = 'http://127.0.0.1:3080/';

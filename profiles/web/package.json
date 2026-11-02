@@ -20,6 +20,7 @@
     "monqey-code-mcp": "link:../../packages/monqey-code-mcp",
     "monqey-code-memory": "link:../../packages/monqey-code-memory",
     "monqey-code-notifications": "link:../../packages/monqey-code-notifications",
+    "monqey-code-pixel-ui": "link:../../packages/monqey-code-pixel-ui",
     "monqey-code-workspace-tools": "link:../../packages/monqey-code-workspace-tools",
     "zod": "^4.5.4"
   },
@@ -36,6 +37,7 @@
         "monqey-code-cowork",
         "monqey-code-memory",
         "monqey-code-workspace-tools",
+        "monqey-code-pixel-ui",
         "@wxg-prc-cpg/browser-skill-dsh-plugin"
       ],
       "patchReload": "live"

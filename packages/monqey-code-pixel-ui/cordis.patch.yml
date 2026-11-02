@@ -1,0 +1,4 @@
+# Pixel-art UI is a plugin: remove this insert to restore the classic look.
+- insert:
+    - id: ui-pixel-monqey
+      name: monqey-code-pixel-ui
