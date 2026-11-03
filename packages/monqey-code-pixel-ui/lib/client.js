@@ -37,7 +37,7 @@ html body .monqey-pixel-round, html body .monqey-pixel-round * { border-radius: 
 html body * { font-family: var(--monqey-pixel-font); }
 html body code, html body pre, html body kbd, html body samp, html body pre *, html body code * { font-family: 'Cascadia Mono','Consolas',ui-monospace,monospace; }
 html body textarea:focus, html body input:focus { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 0; }
-html body :is([class*="_card_"], [class*="_addCard_"], [class*="_fileCard_"], [class*="_instructionsCard_"], [class*="_ioCard_"], [class*="_rowCard_"], [class*="_setupCard_"], [class*="_dockHintCard_"]) { border: var(--monqey-pixel-border) solid var(--dsw-alias-border-l1) !important; box-shadow: 3px 3px 0 var(--monqey-pixel-shadow); }
+html body :is([class*="_card_"], [class$="_card"], [class*="_card "], [class*="_addCard_"], [class$="_addCard"], [class*="_addCard "], [class*="_fileCard_"], [class$="_fileCard"], [class*="_fileCard "], [class*="_instructionsCard_"], [class$="_instructionsCard"], [class*="_instructionsCard "], [class*="_ioCard_"], [class$="_ioCard"], [class*="_ioCard "], [class*="_rowCard_"], [class$="_rowCard"], [class*="_rowCard "], [class*="_setupCard_"], [class$="_setupCard"], [class*="_setupCard "], [class*="_dockHintCard_"], [class$="_dockHintCard"], [class*="_dockHintCard "]) { border: var(--monqey-pixel-border) solid var(--dsw-alias-border-l1) !important; box-shadow: 3px 3px 0 var(--monqey-pixel-shadow); }
 ${LIGHT} {
   --dsw-alias-bg-base: #fff4dc; --dsw-alias-bg-layer-1: #f7e6c0; --dsw-alias-bg-layer-2: #f1d9a6;
   --dsw-alias-bg-overlay: #fffaf0; --dsw-alias-border-l1: #2b2118; --dsw-alias-border-l2: #2b2118;
@@ -127,7 +127,7 @@ html body [role="dialog"] select, html body [role="dialog"] input:not([type="che
 .monqey-pixel-activity { display: flex; flex-direction: column; height: 100%; min-height: 0; font-size: 12px; }
 .monqey-pixel-activity-bar { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px; border-bottom: 2px solid var(--dsw-alias-border-l1); }
 .monqey-pixel-chip { padding: 2px 8px; cursor: pointer; color: var(--dsw-alias-label-secondary); background: transparent; border: 2px solid var(--dsw-alias-border-l1); font-size: 12px; }
-.monqey-pixel-chip[data-on] { background: var(--dsw-alias-border-l2); color: var(--dsw-alias-label-primary); }
+html body .monqey-pixel-chip[data-on] { background: var(--dsw-alias-brand-primary); border-color: var(--dsw-alias-brand-primary); color: #fff; }
 .monqey-pixel-activity-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 0; }
 .monqey-pixel-activity-row { display: block; width: 100%; text-align: left; padding: 3px 8px; cursor: pointer; background: transparent; border: 0; color: var(--dsw-alias-label-primary); font-size: 12px; }
 .monqey-pixel-activity-row:hover { background: var(--dsw-alias-interactive-bg-hover); }
@@ -136,6 +136,24 @@ html body [role="dialog"] select, html body [role="dialog"] input:not([type="che
 .monqey-pixel-activity-tag[data-error] { background: #d6453a; color: #fff; border-color: #d6453a; }
 .monqey-pixel-activity-raw { margin: 2px 8px 6px; padding: 6px; max-height: 240px; overflow: auto; white-space: pre-wrap; word-break: break-all; border: 2px solid var(--dsw-alias-border-l1); font-family: Consolas, monospace; font-size: 11px; }
 .monqey-pixel-activity-empty { padding: 16px 8px; color: var(--dsw-alias-label-tertiary); }
+/* Thick pixel frame on the composer card, tooltips and code blocks. */
+html body :is([class$="_card"], [class*="_card "]):has(> :is([class$="_row"], [class*="_row "]) > :is([class$="_tools"], [class*="_tools "])) { border: var(--monqey-pixel-border) solid var(--dsw-alias-border-l1) !important; box-shadow: 4px 4px 0 var(--monqey-pixel-shadow) !important; }
+html body [role="tooltip"] { border: var(--monqey-pixel-border) solid var(--dsw-alias-border-l1) !important; box-shadow: 2px 2px 0 var(--monqey-pixel-shadow) !important; }
+html body pre { border: var(--monqey-pixel-border) solid var(--dsw-alias-border-l1); }
+/* Composer: the bottom toolbar row sits on a darker band so its buttons stand out from the cream card. */
+html body :is([class$="_row"], [class*="_row "]):has(> :is([class$="_tools"], [class*="_tools "])) { background: var(--monqey-pixel-composer-band); border-top: 2px solid var(--dsw-alias-border-l1); padding: 6px 8px; margin: 0; box-sizing: border-box; }
+html body :is([class$="_row"], [class*="_row "]):has(> :is([class$="_tools"], [class*="_tools "])) button:is([class$="_primary"], [class*="_primary "]):disabled { background: var(--monqey-pixel-composer-send-off) !important; color: var(--dsw-alias-label-tertiary) !important; opacity: 1; }
+${LIGHT} { --monqey-pixel-composer-band: #efd49b; --monqey-pixel-composer-send-off: #dcbc7d; }
+${DARK} { --monqey-pixel-composer-band: #2d2217; --monqey-pixel-composer-send-off: #4a3820; }
+.monqey-pixel-status { display: inline-flex; align-items: center; gap: 8px; padding: 0 8px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.monqey-pixel-status b { font-weight: 600; color: var(--dsw-alias-label-primary); }
+.monqey-pixel-status [data-kind="failed"][data-n] b { color: #d6453a; }
+.monqey-pixel-status [data-kind="working"][data-n] b { animation: monqey-pixel-pulse 1s steps(2, jump-none) infinite; }
+html[data-monqey-motion="still"] .monqey-pixel-status b, html[data-monqey-motion="off"] .monqey-pixel-status b, html[data-monqey-motion="still"] .monqey-pixel-sign, html[data-monqey-motion="off"] .monqey-pixel-sign { animation: none !important; }
+@keyframes monqey-pixel-pulse { 50% { opacity: 0.35; } }
+@keyframes monqey-pixel-drop { from { transform: translateY(-8px); } to { transform: translateY(0); } }
+.monqey-pixel-sign { display: inline-block; padding: 1px 8px; border: 2px solid #5a3a14; background: #c98a3c; color: #fff4dc; font-weight: 600; box-shadow: 2px 2px 0 var(--monqey-pixel-shadow); animation: monqey-pixel-drop 0.25s steps(3, end); }
+.monqey-pixel-motion { background: transparent; border: 2px solid var(--dsw-alias-border-l1); color: var(--dsw-alias-label-secondary); cursor: pointer; font: inherit; font-size: 11px; padding: 0 5px; }
 `;
 
     function Sprite({ name, size }) {
@@ -156,6 +174,18 @@ html body [role="dialog"] select, html body [role="dialog"] input:not([type="che
 
     // Idle: the mascot falls asleep after IDLE_MS without pointer or keyboard activity.
     const IDLE_MS = 5 * 60 * 1000;
+    // Motion level: "full" (pulses + idle sleep), "still" (no animation, idle sleep), "off" (neither).
+    const MOTION_KEY = "monqey-pixel-motion";
+    const MOTION_LEVELS = ["full", "still", "off"];
+    function getMotion() {
+      let value = null;
+      try { value = window.localStorage.getItem(MOTION_KEY); } catch { /* storage unavailable */ }
+      if (MOTION_LEVELS.includes(value)) return value;
+      return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "still" : "full";
+    }
+    function applyMotion(level) {
+      try { document.documentElement.setAttribute("data-monqey-motion", level); } catch { /* no document */ }
+    }
     function useIdle() {
       const [idle, setIdle] = react.useState(false);
       react.useEffect(() => {
@@ -163,7 +193,7 @@ html body [role="dialog"] select, html body [role="dialog"] input:not([type="che
         const wake = () => {
           setIdle(false);
           clearTimeout(timer);
-          timer = setTimeout(() => setIdle(true), IDLE_MS);
+          timer = setTimeout(() => setIdle(getMotion() !== "off"), IDLE_MS);
         };
         const events = ["pointerdown", "pointermove", "keydown", "wheel", "focus"];
         events.forEach((name) => window.addEventListener(name, wake, { passive: true }));
@@ -306,6 +336,11 @@ html body [role="dialog"] select, html body [role="dialog"] input:not([type="che
       return "Turns";
     }
 
+    function sourceName(source) {
+      if (typeof source !== "object" || source === null) return String(source);
+      return String(source.kind ?? source.type ?? source.name ?? source.id ?? "context");
+    }
+
     function activitySummary(event) {
       const type = String(event.type);
       const d = event.data || {};
@@ -319,7 +354,7 @@ html body [role="dialog"] select, html body [role="dialog"] input:not([type="che
         case "llm/retry": return "retry " + d.retry + (d.maxRetries ? "/" + d.maxRetries : "") + " in " + Math.round((d.delayMs || 0) / 1000) + "s";
         case "llm/retry-started": return "retry " + d.retry + " started";
         case "turn/end": return d.reason?.kind === "error" ? "error: " + (d.reason.error?.message || "failed") : String(d.reason?.kind || "ended");
-        case "user/message": return d.source && d.source !== "user" ? "context from " + d.source : "user message";
+        case "user/message": return d.source && d.source !== "user" ? "context from " + sourceName(d.source) : "user message";
         default: return type;
       }
     }
@@ -378,11 +413,55 @@ html body [role="dialog"] select, html body [role="dialog"] input:not([type="che
       });
     }
 
-    function ActivityButton({ open }) {
-      return jsx("button", {
-        type: "button", onClick: open, title: "Open Activity log", "aria-label": "Open Activity log",
-        style: { color: "var(--dsw-alias-label-secondary)", background: "transparent", border: 0, cursor: "pointer", padding: "0 8px", height: 28, font: "inherit", fontSize: 13 },
-        children: "Activity"
+    // Header status: live tool counts, a sign while the agent waits for an answer, and the motion switch.
+    function summarizeSession(snapshot) {
+      const calls = new Set();
+      const results = new Map();
+      let asked = 0, decided = 0;
+      for (const entry of snapshot?.entries ?? []) {
+        const event = entry?.event ?? entry;
+        if (!event || typeof event.type !== "string") continue;
+        const d = event.data || {};
+        if (event.type === "tool/call") calls.add(d.callId ?? calls.size);
+        else if (event.type === "tool/result") results.set(d.callId ?? "r" + results.size, !!d.error);
+        else if (event.type === "approval/asked") asked++;
+        else if (event.type === "approval/decided") decided++;
+        else if (event.type === "turn/end") { asked = 0; decided = 0; }
+      }
+      let failed = 0;
+      results.forEach((isError) => { if (isError) failed++; });
+      const finished = results.size;
+      return { working: Math.max(0, calls.size - finished), done: finished - failed, failed, waiting: Math.max(0, asked - decided) };
+    }
+
+    function ActivityButton({ open, binding }) {
+      const source = binding?.eventSource;
+      const snapshot = react.useSyncExternalStore(
+        (listener) => source ? source.subscribe(listener) : () => {},
+        () => source ? source.getSnapshot() : null,
+        () => source ? source.getSnapshot() : null
+      );
+      const [motion, setMotion] = react.useState(getMotion);
+      react.useEffect(() => { applyMotion(motion); }, [motion]);
+      const counts = react.useMemo(() => summarizeSession(snapshot), [snapshot]);
+      const cycle = () => {
+        const next = MOTION_LEVELS[(MOTION_LEVELS.indexOf(motion) + 1) % MOTION_LEVELS.length];
+        try { window.localStorage.setItem(MOTION_KEY, next); } catch { /* storage unavailable */ }
+        setMotion(next);
+      };
+      const stat = (kind, label) => jsxs("span", { "data-kind": kind, "data-n": counts[kind] > 0 || undefined, children: [jsx("b", { children: counts[kind] }), " " + label] });
+      return jsxs("span", {
+        className: "monqey-pixel-status",
+        children: [
+          counts.waiting > 0 ? jsx("span", { className: "monqey-pixel-sign", role: "alert", children: "Answer in Chat" }) : null,
+          stat("working", "working"), stat("done", "done"), stat("failed", "failed"),
+          jsx("button", { type: "button", className: "monqey-pixel-motion", onClick: cycle, title: "Motion: " + motion + " (click to change)", "aria-label": "Motion level: " + motion, children: motion }),
+          jsx("button", {
+            type: "button", onClick: open, title: "Open Activity log", "aria-label": "Open Activity log",
+            style: { color: "var(--dsw-alias-label-secondary)", background: "transparent", border: 0, cursor: "pointer", padding: "0 8px", height: 28, font: "inherit", fontSize: 13 },
+            children: "Activity"
+          })
+        ]
       });
     }
 
@@ -390,6 +469,9 @@ html body [role="dialog"] select, html body [role="dialog"] input:not([type="che
 
     function apply(ctx) {
       ctx.effect(() => ctx.theme.overrideTokens("monqey-code-pixel-ui", THEME_TOKENS), "monqey-code-pixel-ui: theme tokens");
+      if (typeof document !== "undefined") {
+        ctx.effect(() => { applyMotion(getMotion()); return () => document.documentElement.removeAttribute("data-monqey-motion"); }, "monqey-code-pixel-ui: motion level");
+      }
       if (typeof document !== "undefined") {
         ctx.effect(() => {
           const style = document.createElement("style");
@@ -431,7 +513,11 @@ html body [role="dialog"] select, html body [role="dialog"] input:not([type="che
         }, ActivityPanel));
         scope.slots.inject("conversation.session.header.utilities", () => scope.slots.register({
           name: "conversation.session.header.utilities", id, order: 60,
-          inject: (sessionId) => ({ open: () => scope.sidebarRight.openTabIn(sessionId, "monqey-activity") })
+          inject: (sessionId) => {
+            let binding = null;
+            try { binding = scope.sessions.binding(sessionId); } catch { /* session not bound yet */ }
+            return { binding, open: () => scope.sidebarRight.openTabIn(sessionId, "monqey-activity") };
+          }
         }, ActivityButton));
       });
     }
